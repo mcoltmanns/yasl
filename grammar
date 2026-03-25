@@ -7,7 +7,7 @@ comment -> '/' '/' <anything>
 
 constant -> 'const' name type literal
 
-instruction -> 'push' type (name | literal)
+instruction -> 'push' (name | type literal) -- type name | literal here because the compiler needs to know how to annotate the value on the stack, and does not infer from literals
     | 'pop'
     | 'dup'
     | 'swap'
