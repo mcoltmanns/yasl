@@ -1,0 +1,25 @@
+// simple fibonacci test
+
+label main
+    push i32 10
+    call fib
+    ret
+
+label fib
+    dup
+    push i32 1
+    gt
+    jumpif fib_recurse
+    ret
+
+label fib_recurse
+    dup
+    push i32 1
+    sub
+    call fib
+    swap
+    push i32 2
+    sub
+    call fib
+    add
+    ret
