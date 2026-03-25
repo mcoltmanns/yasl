@@ -1,4 +1,5 @@
 use yasl::tokenizer;
+use yasl::parser;
 use std::fs;
 
 fn main() {
@@ -12,13 +13,13 @@ fn main() {
         }
     };
 
-    let mut t = tokenizer::Tokenizer::new(&src_string);
+    let tokens = tokenizer::tokenize(&src_string);
 
-    let tokens = t.tokenize();
-
-    for token in &tokens {
-        println!("{}", token);
+    for t in &tokens {
+        println!("{}", t);
     }
+
+    parser::parse_program(&tokens);
 
     println!("Done")
 }

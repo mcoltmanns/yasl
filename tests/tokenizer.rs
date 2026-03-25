@@ -1,8 +1,7 @@
 use yasl::tokenizer::*;
 
 fn tokenize_kinds(source: &str) -> Vec<TokenKind> {
-    let mut t = Tokenizer::new(source);
-    let mut tokens: Vec<TokenKind> = t.tokenize().iter().map(|t| t.kind.clone()).collect();
+    let mut tokens: Vec<TokenKind> = tokenize(source).iter().map(|t| t.kind.clone()).collect();
     tokens.remove(tokens.len()  - 1);
     tokens
 }

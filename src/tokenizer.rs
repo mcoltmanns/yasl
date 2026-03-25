@@ -68,8 +68,12 @@ impl Display for Token {
     }
 }
 
+pub fn tokenize(source: &str) -> Vec<Token> {
+    Tokenizer::new(source).run()
+}
+
 #[derive(Debug)]
-pub struct Tokenizer<'a> {
+struct Tokenizer<'a> {
     source: &'a str,
     pos: usize,
     line: usize,
@@ -77,20 +81,19 @@ pub struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
-    pub fn new(source: &'a str) -> Self {
+    fn new(source: &'a str) -> Self {
         Tokenizer { source, pos: 0, line: 1, col: 1 }
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
+    fn run(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
             self.consume_whitespace();
 
             let t = self.consume_token();
+            let done = t.kind == TokenKind::Eof;
             tokens.push(t);       
-            if tokens.last().unwrap().kind == TokenKind::Eof {
-                break;
-            }
+            if done { break; }
         }
         tokens
     }
