@@ -1,7 +1,8 @@
 // simple fibonacci test
+const ten i8 -400
 
 label main
-    push i32 10
+    push ten
     call fib
     ret
 
@@ -23,3 +24,4 @@ label fib_recurse
     call fib
     add
     ret
+#!D
