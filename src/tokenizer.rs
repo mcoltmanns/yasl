@@ -1,8 +1,10 @@
 use std::fmt::Display;
 
+use crate::logger::Logger;
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
-    Unknown,
+    Unknown(String),
     Eof,
 
     Const,
@@ -43,28 +45,31 @@ pub enum TokenKind {
     // these are all literals
     // tokenizer does not parse them, only extract
     Name(String),
-    Decimal(String),
-    Hex(String),
-    Bin(String),
-    Float(String),
+    Literal(String),
 
     // these are types
     // payload denotes width
-    I(u8),
-    U(u8),
-    F(u8),
-    Ptr
+    IType(u8),
+    UType(u8),
+    FType(u8),
+    PtrType
 }
 
 #[derive(Debug)]
 pub struct Token {
     pub kind: TokenKind,
-    line: usize,
-    col: usize,
+    pub line: usize,
+    pub col: usize,
 }
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} {}:{}", self.kind, self.line, self.col)
+        let info = match &self.kind {
+            TokenKind::Name(s) => s,
+            TokenKind::Literal(s) => s,
+            TokenKind::Unknown(s) => s,
+            _ => return write!(f, "{:?} {}:{}", self.kind, self.line, self.col)
+        };
+        write!(f, "\"{}\" {}:{}", info, self.line, self.col)
     }
 }
 
@@ -147,18 +152,18 @@ impl<'a> Tokenizer<'a> {
             "ret" => TokenKind::Ret,
             "cast" => TokenKind::Cast,
             "conv" => TokenKind::Conv,
-            "ptr" => TokenKind::Ptr,
-            "i8" => TokenKind::I(8),
-            "i16" => TokenKind::I(16),
-            "i32" => TokenKind::I(32),
-            "i64" => TokenKind::I(64),
-            "u8" => TokenKind::U(8),
-            "u16" => TokenKind::U(16),
-            "u32" => TokenKind::U(32),
-            "u64" => TokenKind::U(64),
-            "f16" => TokenKind::F(16),
-            "f32" => TokenKind::F(32),
-            "f64" => TokenKind::F(64),
+            "ptr" => TokenKind::PtrType,
+            "i8" => TokenKind::IType(8),
+            "i16" => TokenKind::IType(16),
+            "i32" => TokenKind::IType(32),
+            "i64" => TokenKind::IType(64),
+            "u8" => TokenKind::UType(8),
+            "u16" => TokenKind::UType(16),
+            "u32" => TokenKind::UType(32),
+            "u64" => TokenKind::UType(64),
+            "f16" => TokenKind::FType(16),
+            "f32" => TokenKind::FType(32),
+            "f64" => TokenKind::FType(64),
             w => {
                 let t = self.construct_name_or_literal(w);
                 self.advance_times(tok_len);
@@ -184,20 +189,13 @@ impl<'a> Tokenizer<'a> {
         }
         // if the first letter is not numeric, we don't know what this token is
         else if first.is_some_and(|c| !c.is_numeric() && c != '-' ) {
-            return self.construct_token(TokenKind::Unknown);
+            return self.construct_token(TokenKind::Unknown(word.to_string()));
         }
         // otherwise, it is a number
         // the tokenizer doesn't actually parse numbers
-        // but tokens are distinguished based on the type of number they are
-        let kind = match word.get(0..2) {
-            Some("0x") => TokenKind::Hex(word[2..].to_string()),
-            Some("0b") => TokenKind::Bin(word[2..].to_string()),
-            Some("0f") => TokenKind::Float(word[2..].to_string()),
-            _ => TokenKind::Decimal(word.to_string())
-        };
         // this does allow for bad numbers like 0b1234
         // but it is the parser's job to worry about those
-        self.construct_token(kind)
+        self.construct_token(TokenKind::Literal(word.to_string()))
     }
 
     fn peek(&self) -> Option<char> {

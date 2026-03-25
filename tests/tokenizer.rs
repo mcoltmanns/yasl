@@ -36,17 +36,17 @@ fn multiple_keywords() {
 
 #[test]
 fn type_i32() {
-    assert_eq!(tokenize_kinds("i32"), vec![TokenKind::I(32)]);
+    assert_eq!(tokenize_kinds("i32"), vec![TokenKind::IType(32)]);
 }
 
 #[test]
 fn type_f64() {
-    assert_eq!(tokenize_kinds("f64"), vec![TokenKind::F(64)]);
+    assert_eq!(tokenize_kinds("f64"), vec![TokenKind::FType(64)]);
 }
 
 #[test]
 fn type_ptr() {
-    assert_eq!(tokenize_kinds("ptr"), vec![TokenKind::Ptr]);
+    assert_eq!(tokenize_kinds("ptr"), vec![TokenKind::PtrType]);
 }
 
 // --- Names ---
@@ -78,27 +78,27 @@ fn uppercase_is_name() {
 
 #[test]
 fn integer_literal() {
-    assert_eq!(tokenize_kinds("42"), vec![TokenKind::Decimal("42".to_string())]);
+    assert_eq!(tokenize_kinds("42"), vec![TokenKind::Literal("42".to_string())]);
 }
 
 #[test]
 fn negative_integer_literal() {
-    assert_eq!(tokenize_kinds("-42"), vec![TokenKind::Decimal("-42".to_string())]);
+    assert_eq!(tokenize_kinds("-42"), vec![TokenKind::Literal("-42".to_string())]);
 }
 
 #[test]
 fn hex_literal() {
-    assert_eq!(tokenize_kinds("0xFF"), vec![TokenKind::Hex("FF".to_string())]);
+    assert_eq!(tokenize_kinds("0xFF"), vec![TokenKind::Literal("0xFF".to_string())]);
 }
 
 #[test]
 fn bin_literal() {
-    assert_eq!(tokenize_kinds("0b1010"), vec![TokenKind::Bin("1010".to_string())]);
+    assert_eq!(tokenize_kinds("0b1010"), vec![TokenKind::Literal("0b1010".to_string())]);
 }
 
 #[test]
 fn float_literal() {
-    assert_eq!(tokenize_kinds("3.14"), vec![TokenKind::Decimal("3.14".to_string())]);
+    assert_eq!(tokenize_kinds("3.14"), vec![TokenKind::Literal("3.14".to_string())]);
 }
 
 // --- Mixed ---
@@ -107,8 +107,8 @@ fn float_literal() {
 fn keyword_type_literal() {
     assert_eq!(tokenize_kinds("push i32 42"), vec![
         TokenKind::Push,
-        TokenKind::I(32),
-        TokenKind::Decimal("42".to_string()),
+        TokenKind::IType(32),
+        TokenKind::Literal("42".to_string()),
     ]);
 }
 
@@ -128,7 +128,7 @@ fn comment_does_not_consume_next_line() {
 
 #[test]
 fn unknown_symbol() {
-    assert!(tokenize_kinds("@").contains(&TokenKind::Unknown));
-    assert!(tokenize_kinds("#").contains(&TokenKind::Unknown));
-    assert!(tokenize_kinds("$").contains(&TokenKind::Unknown));
+    assert!(tokenize_kinds("@").contains(&TokenKind::Unknown("@".to_string())));
+    assert!(tokenize_kinds("#").contains(&TokenKind::Unknown("#".to_string())));
+    assert!(tokenize_kinds("$").contains(&TokenKind::Unknown("$".to_string())));
 }
