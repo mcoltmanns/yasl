@@ -1,9 +1,12 @@
+use yasl::logger;
 use yasl::tokenizer;
 use yasl::parser;
 use std::fs;
 
 fn main() {
     println!("This is yasl {}", env!("CARGO_PKG_VERSION"));
+
+    let mut logger = logger::StdoutLogger;
 
     let src_path = std::path::Path::new("./test.yas");
     let src_string = match fs::read_to_string(src_path) {
@@ -15,11 +18,9 @@ fn main() {
 
     let tokens = tokenizer::tokenize(&src_string);
 
-    for t in &tokens {
-        println!("{}", t);
+    let parsed = parser::parse_program(&tokens, &mut logger);
+
+    for s in &parsed {
+        println!("{:?}", s);
     }
-
-    parser::parse_program(&tokens);
-
-    println!("Done")
 }
