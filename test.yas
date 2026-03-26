@@ -1,5 +1,5 @@
 // simple fibonacci test
-const ten i8 -400
+const ten i8 -127
 
 label main
     push ten

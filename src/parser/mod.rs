@@ -2,11 +2,12 @@
 // makes sure statements are well-formed
 // converts number literals into actual number values
 // makes sure literals are not too wide for the types of the constants they are associated with
+// does not do typechecking
 
 use std::num::{ParseFloatError, ParseIntError};
 
 use crate::tokenizer::{Token, TokenKind};
-use crate::logger::Logger;
+use crate::logger::{Logger, LogEvent, EventKind};
 
 #[derive(Debug)]
 pub enum DType {
@@ -73,21 +74,20 @@ pub enum Statement {
 }
 
 pub fn parse_program(tokens: &[Token], logger: &mut impl Logger) -> Vec<Statement> {
-    let mut parser = Parser::new(tokens.iter().peekable(), logger);
-    parser.run()
+    let mut parser = Parser::new(tokens.iter().peekable());
+    parser.run(logger)
 }
 
 struct Parser<'a> {
     tokens: std::iter::Peekable<std::slice::Iter<'a, Token>>,
-    logger: &'a mut dyn Logger
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: std::iter::Peekable<std::slice::Iter<'a, Token>>, logger: &'a mut impl Logger) -> Self {
-        Parser { tokens, logger }
+    fn new(tokens: std::iter::Peekable<std::slice::Iter<'a, Token>>) -> Self {
+        Parser { tokens }
     }
     
-    fn run(&mut self) -> Vec<Statement> {
+    fn run(&mut self, logger: &mut impl Logger) -> Vec<Statement> {
         let mut statements = vec![];
 
         loop {
@@ -102,8 +102,9 @@ impl<'a> Parser<'a> {
                     // if it isn't, try to process
                     // processing consumes
                     _ => {
-                        if let Some(s) = self.parse_statement() {
-                            statements.push(s);
+                        match self.parse_statement() {
+                            Ok(s) => statements.push(s),
+                            Err(e) => logger.log(e),
                         }
                     }
                 }
@@ -112,181 +113,183 @@ impl<'a> Parser<'a> {
 
         // once we hit EOF, peek again and make sure there's nothing left
         if let Some(t) = self.tokens.peek() {
-            self.logger.error("more tokens after EOF (how did you manage that?)", t.line, t.col);
+            logger.error("more tokens after EOF (how did you manage that?)".to_string(), t.line, t.col);
         }
 
         statements
     }
 
-    fn parse_statement(&mut self) -> Option<Statement> {
+    // this can panic in some places
+    // a panic should never happen - it means the token stream is malformed somehow
+    // in cases where a statement could not be parsed but it was programmer error, this just
+    // returns None
+    fn parse_statement(&mut self) -> Result<Statement, LogEvent> {
+        // we unwrap when getting a next token and expecting one to be there because if the token stream
+        // is out of tokens already it's a bug, not a normal error case
+        let t = self.tokens.next().unwrap();
         // all statements start with a control word, so check what that is
-        if let Some(t) = self.tokens.next() {
-            match &t.kind {
-                // implicit args are one word, and can be parsed directly
-                TokenKind::Pop => Some(Statement::Pop),
-                TokenKind::Dup => Some(Statement::Dup),
-                TokenKind::Swap => Some(Statement::Swap),
-                TokenKind::Add => Some(Statement::Add),
-                TokenKind::Sub => Some(Statement::Sub),
-                TokenKind::Div => Some(Statement::Div),
-                TokenKind::Mult => Some(Statement::Mult),
-                TokenKind::Mod => Some(Statement::Mod),
-                TokenKind::Inc => Some(Statement::Inc),
-                TokenKind::Dec => Some(Statement::Dec),
-                TokenKind::And => Some(Statement::And),
-                TokenKind::Or => Some(Statement::Or),
-                TokenKind::Xor => Some(Statement::Xor),
-                TokenKind::Bsl => Some(Statement::Bsl),
-                TokenKind::Bsr => Some(Statement::Bsr),
-                TokenKind::Rol => Some(Statement::Rol),
-                TokenKind::Ror => Some(Statement::Ror),
-                TokenKind::Eq => Some(Statement::Eq),
-                TokenKind::Neq => Some(Statement::Neq),
-                TokenKind::Lt => Some(Statement::Lt),
-                TokenKind::Gt => Some(Statement::Gt),
-                TokenKind::Leq => Some(Statement::Leq),
-                TokenKind::Geq => Some(Statement::Geq),
-                TokenKind::Ret => Some(Statement::Ret),
+        match &t.kind {
+            // implicit args are one word, and can be parsed directly
+            TokenKind::Pop => Ok(Statement::Pop),
+            TokenKind::Dup => Ok(Statement::Dup),
+            TokenKind::Swap => Ok(Statement::Swap),
+            TokenKind::Add => Ok(Statement::Add),
+            TokenKind::Sub => Ok(Statement::Sub),
+            TokenKind::Div => Ok(Statement::Div),
+            TokenKind::Mult => Ok(Statement::Mult),
+            TokenKind::Mod => Ok(Statement::Mod),
+            TokenKind::Inc => Ok(Statement::Inc),
+            TokenKind::Dec => Ok(Statement::Dec),
+            TokenKind::And => Ok(Statement::And),
+            TokenKind::Or => Ok(Statement::Or),
+            TokenKind::Xor => Ok(Statement::Xor),
+            TokenKind::Bsl => Ok(Statement::Bsl),
+            TokenKind::Bsr => Ok(Statement::Bsr),
+            TokenKind::Rol => Ok(Statement::Rol),
+            TokenKind::Ror => Ok(Statement::Ror),
+            TokenKind::Eq => Ok(Statement::Eq),
+            TokenKind::Neq => Ok(Statement::Neq),
+            TokenKind::Lt => Ok(Statement::Lt),
+            TokenKind::Gt => Ok(Statement::Gt),
+            TokenKind::Leq => Ok(Statement::Leq),
+            TokenKind::Geq => Ok(Statement::Geq),
+            TokenKind::Ret => Ok(Statement::Ret),
 
-                // explicit args need some more processing
-                TokenKind::Const => {
-                    if let Some(t) = self.tokens.next() {
-                        match &t.kind {
-                            TokenKind::Name(s) => {
-                                if let Some(value) = self.parse_literal_typed() {
-                                    Some(Statement::Const { name: s.to_string(), value })
-                                }
-                                else {
-                                    self.logger.error("constant definition missing value", t.line, t.col);
-                                    None
-                                }
-                            }
-                            _ => {
-                                self.logger.error("constant definition missing name", t.line, t.col);
-                                None
-                            }
-                        }
+            // explicit args need some more processing
+            TokenKind::Const => {
+                let t = self.tokens.next().unwrap();
+                match &t.kind {
+                    TokenKind::Name(s) => {
+                        let value = self.parse_literal_typed()?;
+                        Ok(Statement::Const { name: s.to_string(), value })
                     }
-                    else {
-                        self.logger.error("expected constant definition", t.line, t.col);
-                        None
+                    _ => {
+                        Err(LogEvent { kind: EventKind::Error, msg: "expected a constant definition".to_string(), line: t.line, col: t.col })
                     }
-                }
-
-                TokenKind::Push => {
-                    // next token can be either a name or a literal
-                    if let Some(t) = self.tokens.peek() {
-                        match &t.kind {
-                            // if it is a name, extract the name string and build that token
-                            TokenKind::Name(s) => { 
-                                self.tokens.next();
-                                Some(Statement::PushConst { name: s.to_string() })
-                            }
-                            _ => {
-                                // if it isn't a name but we were able to parse a literal out of
-                                // it, build that literal token
-                                self.parse_literal_typed().map(|value| Statement::PushLiteral { value })
-                            }
-                        }
-                    }
-                    // if there is no next token something is really wrong
-                    else {
-                        self.logger.error("expected operand for push", t.line, t.col);
-                        None
-                    }
-                }
-
-                TokenKind::Unknown(s) => {
-                    self.logger.error(format!("unknown token \"{}\"", &s).as_str(), t.line, t.col);
-                    None
-                }
-                _ => {
-                    self.logger.error("expected a statement", t.line, t.col);
-                    None
                 }
             }
-        }
-        else {
-            None
+
+            TokenKind::Push => {
+                // next token can be either a name or a literal
+                let t = self.tokens.peek().unwrap();
+                match &t.kind {
+                    // if it is a name, consume the token, extract the name string and build the statement
+                    TokenKind::Name(s) => { 
+                        self.tokens.next();
+                        Ok(Statement::PushConst { name: s.to_string() })
+                    }
+                    _ => {
+                        // if it isn't a name but we were able to parse a literal out of
+                        // it, build that literal token
+                        let value = self.parse_literal_typed()?;
+                        Ok(Statement::PushLiteral { value })
+                    }
+                }
+            }
+
+            TokenKind::Unknown(s) => Err(LogEvent { kind: EventKind::Error, msg: format!("unknown token \"{}\"", s), line: t.line, col: t.col }),
+
+            _ => {
+                Err(LogEvent { kind: EventKind::Error, msg: format!("unsupported token \"{:?}\"", t.kind), line: t.line, col: t.col})
+            }
         }
     }
 
-    fn parse_literal_typed(&mut self) -> Option<Literal> {
-        if let Some(t) = self.tokens.next() {
-            match &t.kind {
-                TokenKind::IType(w) => {
-                    self.parse_int(*w)
-                }
-                TokenKind::FType(w) => {
-                    Some(Literal { bits: 0, kind: DType::F16 })
-                }
-                TokenKind::UType(w) => {
-                    Some(Literal { bits: 0, kind: DType::U8 })
-                }
-                TokenKind::PtrType => {
-                    Some(Literal { bits: 0, kind: DType::Pointer })
-                }
-                _ => {
-                    self.logger.error("illegal type specification in literal", t.line, t.col);
-                    None
-                }
+    fn parse_literal_typed(&mut self) -> Result<Literal, LogEvent> {
+        let t = self.tokens.next().unwrap();
+        match &t.kind {
+            TokenKind::IType(w) => {
+                self.parse_int(w)
             }
-        }
-        else {
-            None
+            TokenKind::FType(w) => {
+                self.parse_float(w)
+            }
+            //TokenKind::UType(w) => {
+            //    Ok(Literal { bits: 0, kind: DType::U8 })
+            //}
+            //TokenKind::PtrType => {
+            //    Ok(Literal { bits: 0, kind: DType::Pointer })
+            //}
+            _ => Err(LogEvent { kind: EventKind::Error, msg: format!("unknown type \"{}\"", t), line: t.line, col: t.col})
         }
     }
 
-    fn parse_int(&mut self, width: u8) -> Option<Literal> {
-        if let Some(t) = self.tokens.next() {
-            match &t.kind {
-                TokenKind::Literal(s) => {
-                    let value = Parser::str_to_int(s).map_err(|_e| {
-                        self.logger.error("malformed integer literal", t.line, t.col)
-                    }).ok()?;
+    fn parse_float(&mut self, width: &u8) -> Result<Literal, LogEvent> {
+        let t = self.tokens.next().unwrap();
+        match &t.kind {
+            TokenKind::Literal(s) => {
+                let value = Parser::str_to_float(s).map_err(
+                    |e| {
+                        LogEvent { kind: EventKind::Error, msg: format!("unable to parse float literal \"{}\" ({})", s, e.to_string()), line: t.line, col: t.col }
+                    }
+                )?;
 
-                    let dtype = match width {
-                        8 => {
-                            if !(i8::MIN as i64..i8::MAX as i64).contains(&value) {
-                                self.logger.error("literal out of bounds for type", t.line, t.col);
-                            }
-                            DType::I8
-                        }
-                        16 => {
-                            if !(i16::MIN as i64..i16::MAX as i64).contains(&value) {
-                                self.logger.error("literal out of bounds for type", t.line, t.col);
-                            }
-                            DType::I16
-                        }
-                        32 => {
-                            if !(i32::MIN as i64..i32::MAX as i64).contains(&value) {
-                                self.logger.error("literal out of bounds for type", t.line, t.col);
-                            }
-                            DType::I32
-                        }
-                        64 => {
-                            if !(i64::MIN..i64::MAX).contains(&value) {
-                                self.logger.error("literal out of bounds for type", t.line, t.col);
-                            }
-                            DType::I64
-                        }
-                        _ => panic!()
-                    };
+                let dtype = match width {
+                    16 => {
+                        DType::F16
+                    }
+                    32 => {
+                        DType::F32
+                    }
+                    64 => {
+                        DType::F64
+                    }
+                    _ => return Err(LogEvent { kind: EventKind::Error, msg: format!("floats of width {} are not supported", width), line: t.line, col: t.col })
+                };
 
-                    Some(Literal { bits: value as u64, kind: dtype })
-                }
-                _ => {
-                    self.logger.error("expected integer literal", t.line, t.col);
-                    None
-                }
+                Ok(Literal { bits: value as u64, kind: dtype })
             }
+
+            _ => Err(LogEvent { kind: EventKind::Error, msg: "expected float literal".to_string(), line: t.line, col: t.col })
         }
-        else {
-            None
+    }
+
+    fn parse_int(&mut self, width: &u8) -> Result<Literal, LogEvent> {
+        let t = self.tokens.next().unwrap();
+        match &t.kind {
+            TokenKind::Literal(s) => {
+                let value = Parser::str_to_int(s).map_err(
+                    |e| {
+                        LogEvent { kind: EventKind::Error, msg: format!("unable to parse integer literal \"{}\" ({})", s, e.to_string()), line: t.line, col: t.col }
+                    }
+                )?;
+
+                let dtype = match width {
+                    8 => {
+                        if value.abs() > i8::MAX.into() {
+                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
+                        }
+                        DType::I8
+                    }
+                    16 => {
+                        if value.abs() > i16::MAX.into() {
+                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
+                        }
+                        DType::I16
+                    }
+                    32 => {
+                        if value.abs() > i32::MAX.into() {
+                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
+                        }
+                        DType::I32
+                    }
+                    64 => {
+                        // here we can take the datatype correctly because if the string was too
+                        // wide it will have been caught in parsing
+                        DType::I64
+                    }
+                    _ => panic!()
+                };
+
+                Ok(Literal { bits: value as u64, kind: dtype })
+            }
+
+            _ => Err(LogEvent { kind: EventKind::Error, msg: "expected integer literal".to_string(), line: t.line, col: t.col })
         }
     }
 
     fn str_to_int(s: &str) -> Result<i64, ParseIntError> {
+        // have to do own sign logic because rust doesn't do that when parsing ints
         let (sign, s) = if let Some(st) = s.strip_prefix("-") {
             (-1i64, st)
         }
