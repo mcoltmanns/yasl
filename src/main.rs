@@ -16,7 +16,7 @@ fn main() {
         }
     };
 
-    let tokens = tokenizer::tokenize(&src_string);
+    let tokens = tokenizer::tokenize_program(&src_string);
 
     let parsed = parser::parse_program(&tokens, &mut logger);
 

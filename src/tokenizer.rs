@@ -71,7 +71,7 @@ impl Display for Token {
     }
 }
 
-pub fn tokenize(source: &str) -> Vec<Token> {
+pub fn tokenize_program(source: &str) -> Vec<Token> {
     Tokenizer::new(source).run()
 }
 
