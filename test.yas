@@ -24,4 +24,3 @@ label fib_recurse
     call fib
     add
     ret
-#!D

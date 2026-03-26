@@ -3,13 +3,14 @@
 // converts number literals into actual number values
 // makes sure literals are not too wide for the types of the constants they are associated with
 // does not do typechecking
+// does not build any symbol tables
+use std::fmt::Display;
 
-use std::num::{ParseFloatError, ParseIntError};
-
+use half::f16;
 use crate::tokenizer::{Token, TokenKind};
 use crate::logger::{Logger, LogEvent, EventKind};
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub enum DType {
     Pointer,
     I8,
@@ -25,7 +26,7 @@ pub enum DType {
     F64,
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub struct Literal {
     bits: u64,
     kind: DType
@@ -33,7 +34,7 @@ pub struct Literal {
 
 // because the language is so flat, we really don't need much of a tree
 // we can get away with a single enum
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub enum Statement {
     Const { name: String, value: Literal },
     PushConst { name: String },
@@ -41,15 +42,15 @@ pub enum Statement {
     Pop,
     Dup,
     Swap,
-    Load { kind: Literal },
-    Store { kind: Literal },
+    Load { kind: DType },
+    Store { kind: DType },
     Label { name: String },
-    Jump { dest_label: Box<Statement> },
-    Jumpif { dest_label: Box<Statement> },
-    Call { dest_label: Box<Statement> },
+    Jump { dest: String },
+    Jumpif { dest: String },
+    Call { dest: String },
     Ret,
-    Cast { from: Literal, to: Literal },
-    Conv { from: Literal, to: Literal },
+    Cast { to: DType },
+    Conv { to: DType },
 
     Add,
     Sub,
@@ -160,7 +161,8 @@ impl<'a> Parser<'a> {
                 let t = self.tokens.next().unwrap();
                 match &t.kind {
                     TokenKind::Name(s) => {
-                        let value = self.parse_literal_typed()?;
+                        let kind = self.parse_type()?;
+                        let value = self.parse_literal(kind)?;
                         Ok(Statement::Const { name: s.to_string(), value })
                     }
                     _ => {
@@ -181,134 +183,146 @@ impl<'a> Parser<'a> {
                     _ => {
                         // if it isn't a name but we were able to parse a literal out of
                         // it, build that literal token
-                        let value = self.parse_literal_typed()?;
+                        let kind = self.parse_type()?;
+                        let value = self.parse_literal(kind)?;
                         Ok(Statement::PushLiteral { value })
                     }
                 }
             }
 
+            TokenKind::Load => {
+                let kind = self.parse_type()?;
+                Ok(Statement::Load { kind })
+            }
+
+            TokenKind::Store => {
+                let kind = self.parse_type()?;
+                Ok(Statement::Store { kind })
+            }
+
+            TokenKind::Label => {
+                let t = self.tokens.next().unwrap();
+                match &t.kind {
+                    TokenKind::Name(s) => Ok(Statement::Label { name: s.to_string() }),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after label".to_string(), line: t.line, col: t.col })
+                }
+            }
+
+            TokenKind::Jump => {
+                let t = self.tokens.next().unwrap();
+                match &t.kind {
+                    TokenKind::Name(s) => Ok(Statement::Jump { dest: s.to_string() }),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after jump".to_string(), line: t.line, col: t.col })
+                }
+            }
+            
+            TokenKind::Jumpif => {
+                let t = self.tokens.next().unwrap();
+                match &t.kind {
+                    TokenKind::Name(s) => Ok(Statement::Jumpif { dest: s.to_string() }),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after jump".to_string(), line: t.line, col: t.col })
+                }
+            }
+
+            TokenKind::Call => {
+                let t = self.tokens.next().unwrap();
+                match &t.kind {
+                    TokenKind::Name(s) => Ok(Statement::Call { dest: s.to_string() }),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after call".to_string(), line: t.line, col: t.col })
+                }
+            }
+
+            TokenKind::Cast => {
+                let to = self.parse_type()?;
+                Ok(Statement::Cast { to })
+            }
+
+            TokenKind::Conv => {
+                let to = self.parse_type()?;
+                Ok(Statement::Conv { to })
+            }
+
             TokenKind::Unknown(s) => Err(LogEvent { kind: EventKind::Error, msg: format!("unknown token \"{}\"", s), line: t.line, col: t.col }),
 
             _ => {
-                Err(LogEvent { kind: EventKind::Error, msg: format!("unsupported token \"{:?}\"", t.kind), line: t.line, col: t.col})
+                Err(LogEvent { kind: EventKind::Error, msg: format!("unexpected token \"{}\"", t), line: t.line, col: t.col})
             }
         }
     }
 
-    fn parse_literal_typed(&mut self) -> Result<Literal, LogEvent> {
+    fn parse_literal(&mut self, into: DType) -> Result<Literal, LogEvent> {
+        let t = self.tokens.next().unwrap();
+
+        match &t.kind {
+            TokenKind::Literal(st) => {
+                let (repr, radix) =
+                    if let Some(s) = st.strip_prefix("0x") {
+                        (s, 16)
+                    } else if let Some(s) = st.strip_prefix("0b") {
+                        (s, 2)
+                    } else {
+                        (st.as_str(), 10)
+                    };
+
+                let err = |e: &dyn Display| LogEvent {
+                    kind: EventKind::Error,
+                    msg: format!("Unable to parse literal ({})", e),
+                    line: t.line,
+                    col: t.col,
+                };
+
+                let value: Result<u64, LogEvent> = match into {
+                    DType::I8  => i8::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::I16 => i16::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::I32 => i32::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::I64 => i64::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::U8  => u8::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::U16 => u16::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::U32 => u32::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                    DType::U64 => u64::from_str_radix(repr, radix).map_err(|e| err(&e)),
+                    DType::F16 => repr.parse::<f16>().map(|v| v.to_bits() as u64).map_err(|e| err(&e)),
+                    DType::F32 => repr.parse::<f32>().map(|v| v.to_bits() as u64).map_err(|e| err(&e)),
+                    DType::F64 => repr.parse::<f64>().map(|v| v.to_bits()).map_err(|e| err(&e)),
+                    DType::Pointer => u64::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
+                };
+
+                Ok(Literal { bits: value?, kind: into })
+            }
+            _ => Err(LogEvent { kind: EventKind::Error, msg: "expected a literal".to_string(), line: t.line, col: t.col })
+        }
+    }
+
+    fn parse_type(&mut self) -> Result<DType, LogEvent> {
         let t = self.tokens.next().unwrap();
         match &t.kind {
             TokenKind::IType(w) => {
-                self.parse_int(w)
+                match w {
+                    8 => Ok(DType::I8),
+                    16 => Ok(DType::I16),
+                    32 => Ok(DType::I32),
+                    64 => Ok(DType::I64),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: format!("integers of width {} are not supported", w), line: t.line, col: t.col })
+                }
             }
             TokenKind::FType(w) => {
-                self.parse_float(w)
+                match w {
+                    16 => Ok(DType::F16),
+                    32 => Ok(DType::F32),
+                    64 => Ok(DType::F64),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: format!("floats of width {} are not supported", w), line: t.line, col: t.col })
+                }
             }
-            //TokenKind::UType(w) => {
-            //    Ok(Literal { bits: 0, kind: DType::U8 })
-            //}
-            //TokenKind::PtrType => {
-            //    Ok(Literal { bits: 0, kind: DType::Pointer })
-            //}
+            TokenKind::UType(w) => {
+                match w {
+                    8 => Ok(DType::U8),
+                    16 => Ok(DType::U16),
+                    32 => Ok(DType::U32),
+                    64 => Ok(DType::U64),
+                    _ => Err(LogEvent { kind: EventKind::Error, msg: format!("unsigned integers of width {} are not supported", w), line: t.line, col: t.col })
+                }
+            }
+            TokenKind::PtrType => Ok(DType::Pointer),
             _ => Err(LogEvent { kind: EventKind::Error, msg: format!("unknown type \"{}\"", t), line: t.line, col: t.col})
         }
-    }
-
-    fn parse_float(&mut self, width: &u8) -> Result<Literal, LogEvent> {
-        let t = self.tokens.next().unwrap();
-        match &t.kind {
-            TokenKind::Literal(s) => {
-                let value = Parser::str_to_float(s).map_err(
-                    |e| {
-                        LogEvent { kind: EventKind::Error, msg: format!("unable to parse float literal \"{}\" ({})", s, e.to_string()), line: t.line, col: t.col }
-                    }
-                )?;
-
-                let dtype = match width {
-                    16 => {
-                        DType::F16
-                    }
-                    32 => {
-                        DType::F32
-                    }
-                    64 => {
-                        DType::F64
-                    }
-                    _ => return Err(LogEvent { kind: EventKind::Error, msg: format!("floats of width {} are not supported", width), line: t.line, col: t.col })
-                };
-
-                Ok(Literal { bits: value as u64, kind: dtype })
-            }
-
-            _ => Err(LogEvent { kind: EventKind::Error, msg: "expected float literal".to_string(), line: t.line, col: t.col })
-        }
-    }
-
-    fn parse_int(&mut self, width: &u8) -> Result<Literal, LogEvent> {
-        let t = self.tokens.next().unwrap();
-        match &t.kind {
-            TokenKind::Literal(s) => {
-                let value = Parser::str_to_int(s).map_err(
-                    |e| {
-                        LogEvent { kind: EventKind::Error, msg: format!("unable to parse integer literal \"{}\" ({})", s, e.to_string()), line: t.line, col: t.col }
-                    }
-                )?;
-
-                let dtype = match width {
-                    8 => {
-                        if value.abs() > i8::MAX.into() {
-                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
-                        }
-                        DType::I8
-                    }
-                    16 => {
-                        if value.abs() > i16::MAX.into() {
-                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
-                        }
-                        DType::I16
-                    }
-                    32 => {
-                        if value.abs() > i32::MAX.into() {
-                            return Err(LogEvent { kind: EventKind::Error, msg: format!("literal out of bounds for i{}", width), line: t.line, col: t.col });
-                        }
-                        DType::I32
-                    }
-                    64 => {
-                        // here we can take the datatype correctly because if the string was too
-                        // wide it will have been caught in parsing
-                        DType::I64
-                    }
-                    _ => panic!()
-                };
-
-                Ok(Literal { bits: value as u64, kind: dtype })
-            }
-
-            _ => Err(LogEvent { kind: EventKind::Error, msg: "expected integer literal".to_string(), line: t.line, col: t.col })
-        }
-    }
-
-    fn str_to_int(s: &str) -> Result<i64, ParseIntError> {
-        // have to do own sign logic because rust doesn't do that when parsing ints
-        let (sign, s) = if let Some(st) = s.strip_prefix("-") {
-            (-1i64, st)
-        }
-        else {
-            (1i64, s)
-        };
-
-        if let Some(st) = s.strip_prefix("0x") {
-            i64::from_str_radix(st, 16).map(|v| v * sign)
-        }
-        else if let Some(st) = s.strip_prefix("0b") {
-            i64::from_str_radix(st, 2).map(|v| v * sign)
-        }
-        else {
-            s.parse::<i64>().map(|v| v * sign)
-        }
-    }
-
-    fn str_to_float(s: &str) -> Result<f64, ParseFloatError> {
-        s.parse::<f64>()
     }
 }

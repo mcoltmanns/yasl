@@ -95,7 +95,7 @@ impl<'a> Tokenizer<'a> {
 
             let t = self.consume_token();
             let done = t.kind == TokenKind::Eof;
-            tokens.push(t);       
+            tokens.push(t);
             if done { break; }
         }
         tokens
