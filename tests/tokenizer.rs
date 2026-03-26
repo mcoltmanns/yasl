@@ -1,7 +1,9 @@
 use yasl::tokenizer::*;
 
+// these are ai generated! but they seem ok
+
 fn tokenize_kinds(source: &str) -> Vec<TokenKind> {
-    let mut tokens: Vec<TokenKind> = tokenize(source).iter().map(|t| t.kind.clone()).collect();
+    let mut tokens: Vec<TokenKind> = tokenize_program(source).iter().map(|t| t.kind.clone()).collect();
     tokens.remove(tokens.len()  - 1);
     tokens
 }
