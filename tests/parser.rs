@@ -20,7 +20,7 @@ fn const_i8() {
     let stmts = parse("const x i8 10");
     assert_eq!(stmts, vec![Statement::Const {
         name: "x".to_string(),
-        value: Literal { bits: 10, kind: DType::I8 }
+        value: Literal::I8(10)
     }]);
 }
 
@@ -29,7 +29,7 @@ fn const_negative() {
     let stmts = parse("const x i8 -1");
     assert_eq!(stmts, vec![Statement::Const {
         name: "x".to_string(),
-        value: Literal { bits: -1i8 as u64, kind: DType::I8 }
+        value: Literal::I8(-1)
     }]);
 }
 
@@ -38,7 +38,7 @@ fn const_hex() {
     let stmts = parse("const x u8 0xFF");
     assert_eq!(stmts, vec![Statement::Const {
         name: "x".to_string(),
-        value: Literal { bits: 255, kind: DType::U8 }
+        value: Literal::U8(255)
     }]);
 }
 
@@ -47,7 +47,7 @@ fn const_binary() {
     let stmts = parse("const x u8 0b00001111");
     assert_eq!(stmts, vec![Statement::Const {
         name: "x".to_string(),
-        value: Literal { bits: 15, kind: DType::U8 }
+        value: Literal::U8(15)
     }]);
 }
 
@@ -62,7 +62,7 @@ fn const_followed_by_label() {
     // regression test for the eaten-label bug
     let stmts = parse("const x i8 10\nlabel foo");
     assert_eq!(stmts, vec![
-        Statement::Const { name: "x".to_string(), value: Literal { bits: 10, kind: DType::I8 } },
+        Statement::Const { name: "x".to_string(), value: Literal::I8(10) },
         Statement::Label { name: "foo".to_string() },
     ]);
 }
@@ -92,7 +92,7 @@ fn push_const_name() {
 fn push_literal() {
     let stmts = parse("push i32 42");
     assert_eq!(stmts, vec![Statement::PushLiteral {
-        value: Literal { bits: 42, kind: DType::I32 }
+        value: Literal::I32(42)
     }]);
 }
 
@@ -148,7 +148,7 @@ fn fibonacci_program() {
             ret
     ";
     let stmts = parse(src);
-    assert_eq!(stmts[0], Statement::Const { name: "ten".to_string(), value: Literal { bits: 10, kind: DType::I8 } });
+    assert_eq!(stmts[0], Statement::Const { name: "ten".to_string(), value: Literal::I8(10) });
     assert_eq!(stmts[1], Statement::Label { name: "main".to_string() });
     assert_eq!(stmts[2], Statement::PushConst { name: "ten".to_string() });
     assert_eq!(stmts[3], Statement::Call { dest: "fib".to_string() });

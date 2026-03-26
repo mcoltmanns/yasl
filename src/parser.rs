@@ -10,6 +10,7 @@ use half::f16;
 use crate::tokenizer::{Token, TokenKind};
 use crate::logger::{Logger, LogEvent, EventKind};
 
+// these are type annotations for memory instructions
 #[derive(PartialEq, Debug)]
 pub enum DType {
     Pointer,
@@ -26,10 +27,21 @@ pub enum DType {
     F64,
 }
 
+// these are typed values for literals
 #[derive(PartialEq, Debug)]
-pub struct Literal {
-    pub bits: u64,
-    pub kind: DType
+pub enum Literal {
+    Pointer(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    F16(f16),
+    F32(f32),
+    F64(f64),
 }
 
 // because the language is so flat, we really don't need much of a tree
@@ -275,22 +287,20 @@ impl<'a> Parser<'a> {
                     col: t.col,
                 };
 
-                let value: Result<u64, LogEvent> = match into {
-                    DType::I8  => i8::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::I16 => i16::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::I32 => i32::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::I64 => i64::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::U8  => u8::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::U16 => u16::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::U32 => u32::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                    DType::U64 => u64::from_str_radix(repr, radix).map_err(|e| err(&e)),
-                    DType::F16 => repr.parse::<f16>().map(|v| v.to_bits() as u64).map_err(|e| err(&e)),
-                    DType::F32 => repr.parse::<f32>().map(|v| v.to_bits() as u64).map_err(|e| err(&e)),
-                    DType::F64 => repr.parse::<f64>().map(|v| v.to_bits()).map_err(|e| err(&e)),
-                    DType::Pointer => u64::from_str_radix(repr, radix).map(|v| v as u64).map_err(|e| err(&e)),
-                };
-
-                Ok(Literal { bits: value?, kind: into })
+                match into {
+                    DType::I8 => i8::from_str_radix(repr, radix).map(Literal::I8).map_err(|e| err(&e)),
+                    DType::I16 => i16::from_str_radix(repr, radix).map(Literal::I16).map_err(|e| err(&e)),
+                    DType::I32 => i32::from_str_radix(repr, radix).map(Literal::I32).map_err(|e| err(&e)),
+                    DType::I64 => i64::from_str_radix(repr, radix).map(Literal::I64).map_err(|e| err(&e)),
+                    DType::U8 => u8::from_str_radix(repr, radix).map(Literal::U8).map_err(|e| err(&e)),
+                    DType::U16 => u16::from_str_radix(repr, radix).map(Literal::U16).map_err(|e| err(&e)),
+                    DType::U32 => u32::from_str_radix(repr, radix).map(Literal::U32).map_err(|e| err(&e)),
+                    DType::U64 => u64::from_str_radix(repr, radix).map(Literal::U64).map_err(|e| err(&e)),
+                    DType::F16 => repr.parse::<f16>().map(Literal::F16).map_err(|e| err(&e)),
+                    DType::F32 => repr.parse::<f32>().map(Literal::F32).map_err(|e| err(&e)),
+                    DType::F64 => repr.parse::<f64>().map(Literal::F64).map_err(|e| err(&e)),
+                    DType::Pointer => u64::from_str_radix(repr, radix).map(Literal::Pointer).map_err(|e| err(&e)),
+                }
             }
             _ => Err(LogEvent { kind: EventKind::Error, msg: "expected a literal".to_string(), line: t.line, col: t.col })
         }
