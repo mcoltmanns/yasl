@@ -1,7 +1,5 @@
 use std::fmt::Display;
 
-use crate::logger::Logger;
-
 #[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
     Unknown(String),
