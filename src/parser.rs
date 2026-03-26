@@ -28,8 +28,8 @@ pub enum DType {
 
 #[derive(PartialEq, Debug)]
 pub struct Literal {
-    bits: u64,
-    kind: DType
+    pub bits: u64,
+    pub kind: DType
 }
 
 // because the language is so flat, we really don't need much of a tree
@@ -109,6 +109,10 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+            }
+            else {
+                self.tokens.next();
+                break;
             }
         }
 
