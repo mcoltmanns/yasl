@@ -70,6 +70,7 @@ pub enum StatementKind {
     Ret,
     Cast { to: DType },
     Conv { to: DType },
+    Proc { name: String, t_in: Vec<DType>, t_out: Vec<DType> },
 
     Add,
     Sub,
@@ -289,6 +290,31 @@ impl<'a> Parser<'a> {
                 }
             }
 
+            TokenKind::Proc => {
+                let t = self.tokens.next().unwrap();
+                match t.content {
+                    TokenKind::Name(s) => {
+                        self.expect(TokenKind::In);
+                        let ins = self.parse_type_list(TokenKind::Out);
+                        if ins.is_none() {
+                            self.logger.error("expected type list".to_string(), t.pos.line, t.pos.col);
+                            return;
+                        }
+                        self.expect(TokenKind::Out);
+                        let outs = self.parse_type_list(TokenKind::Def);
+                        if outs.is_none() {
+                            self.logger.error("expected type list".to_string(), t.pos.line, t.pos.col);
+                            return;
+                        }
+                        self.expect(TokenKind::Def);
+                        self.statements.push(Statement { content: StatementKind::Proc { name: s, t_in: ins.unwrap(), t_out: outs.unwrap() }, pos: t.pos });
+                    }
+                    _ => {
+                        self.logger.error("expected procedure name".to_string(), t.pos.line, t.pos.col);
+                    }
+                }
+            }
+
             TokenKind::Call => {
                 let t = self.tokens.next().unwrap();
                 match t.content {
@@ -322,13 +348,36 @@ impl<'a> Parser<'a> {
             },
 
             _ => {
-                //panic!("missing token implementation")
+                self.logger.error("unimplemented token".to_string(), t.pos.line, t.pos.col);
             }
         };
     }
 
+    fn parse_type_list(&mut self, terminator: TokenKind) -> Option<Vec<DType>> {
+        let mut types = Vec::new();
+
+        loop {
+            let next = &self.tokens.peek()?.content;
+            if next == &terminator {
+                return Some(types);
+            }
+            types.push(self.parse_type()?);
+        }
+    }
+
+    fn expect(&mut self, kind: TokenKind) -> Option<Token> {
+        let next = self.tokens.next()?;
+        if next.content == kind {
+            Some(next)
+        }
+        else {
+            self.logger.error(format!("expected {:?}, got {:?}", kind, next.content).to_string(), next.pos.line, next.pos.col);
+            None
+        }
+    }
+
     fn parse_literal(&mut self, into: DType) -> Option<Literal> {
-        let t = self.tokens.next().unwrap();
+        let t = self.tokens.next()?;
 
         match t.content {
             TokenKind::Literal(st) => {

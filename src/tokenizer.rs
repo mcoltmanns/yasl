@@ -42,6 +42,10 @@ pub enum TokenKind {
     Ret,
     Cast,
     Conv,
+    Proc,
+    In,
+    Out,
+    Def,
 
     // these are all literals
     // tokenizer does not parse them, only extract
@@ -154,6 +158,10 @@ impl<'a> Tokenizer<'a> {
             "f16" => TokenKind::FType(16),
             "f32" => TokenKind::FType(32),
             "f64" => TokenKind::FType(64),
+            "proc" => TokenKind::Proc,
+            "in" => TokenKind::In,
+            "out" => TokenKind::Out,
+            "def" => TokenKind::Def,
             w => {
                 let t = self.construct_name_or_literal(w);
                 self.advance_times(tok_len);

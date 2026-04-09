@@ -1,27 +1,29 @@
-// simple fibonacci test
-const ten i8 10
-const sixty-5-k ptr 0xffff
-
-label main
-    push ten
-    call fib
-    ret
-
-label fib
+proc fib in i32 out i32 def
+    // stack: n
     dup
     push i32 1
-    gt
-    jumpif fib_recurse
-    ret
+    leq
+    jumpif fib_base     // if n <= 1 return n
 
-label fib_recurse
+    // fib(n-1)
     dup
-    push i32 1
-    sub
-    call fib
+    dec
+    call fib            // stack: n fib(n-1)
+
+    // fib(n-2)
     swap
     push i32 2
     sub
+    call fib            // stack: fib(n-1) fib(n-2)
+
+    add                 // stack: fib(n)
+    ret
+
+    label fib_base
+        ret             // stack: n (which is 0 or 1)
+
+proc main in out def
+    push i32 10
     call fib
-    add
+    // fib(10) = 55
     ret

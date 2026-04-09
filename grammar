@@ -40,6 +40,7 @@ instruction -> 'push' (name | type literal) -- type name | literal here because 
     | 'ret'
     | 'cast' type
     | 'conv' type
+    | 'proc' name 'in' [ name ] out [ name ]
 
 type -> itype | utype | ftype | 'ptr'
 

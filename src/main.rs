@@ -1,3 +1,4 @@
+use yasl::blocker;
 use yasl::logger;
 use yasl::tokenizer;
 use yasl::parser;
@@ -24,5 +25,11 @@ fn main() {
 
     for s in &parser.statements {
         println!("{}", s);
+    }
+
+    let blocks = blocker::construct_blocks(&parser.statements, &mut logger);
+    for b in blocks {
+        println!("{}", b);
+        println!();
     }
 }
