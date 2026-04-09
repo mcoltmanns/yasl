@@ -5,6 +5,7 @@
 // does not do typechecking
 // does not build any symbol tables
 use std::fmt::Display;
+use std::collections::HashMap;
 
 use half::f16;
 use crate::tokenizer::{Token, TokenKind};
@@ -28,7 +29,7 @@ pub enum DType {
 }
 
 // these are typed values for literals
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Literal {
     Pointer(u64),
     I8(i8),
@@ -48,9 +49,7 @@ pub enum Literal {
 // we can get away with a single enum
 #[derive(PartialEq, Debug)]
 pub enum Statement {
-    Const { name: String, value: Literal },
-    PushConst { name: String },
-    PushLiteral { value: Literal },
+    Push { value: Literal },
     Pop,
     Dup,
     Swap,
@@ -93,11 +92,12 @@ pub fn parse_program(tokens: &[Token], logger: &mut impl Logger) -> Vec<Statemen
 
 struct Parser<'a> {
     tokens: std::iter::Peekable<std::slice::Iter<'a, Token>>,
+    constants: HashMap<String, Literal>,
 }
 
 impl<'a> Parser<'a> {
     fn new(tokens: std::iter::Peekable<std::slice::Iter<'a, Token>>) -> Self {
-        Parser { tokens }
+        Parser { tokens, constants: HashMap::new() }
     }
     
     fn run(&mut self, logger: &mut impl Logger) -> Vec<Statement> {
@@ -116,7 +116,8 @@ impl<'a> Parser<'a> {
                     // processing consumes
                     _ => {
                         match self.parse_statement() {
-                            Ok(s) => statements.push(s),
+                            Ok(Some(s)) => statements.push(s),
+                            Ok(None) => {},
                             Err(e) => logger.log(e),
                         }
                     }
@@ -140,37 +141,37 @@ impl<'a> Parser<'a> {
     // a panic should never happen - it means the token stream is malformed somehow
     // in cases where a statement could not be parsed but it was programmer error, this just
     // returns None
-    fn parse_statement(&mut self) -> Result<Statement, LogEvent> {
+    fn parse_statement(&mut self) -> Result<Option<Statement>, LogEvent> {
         // we unwrap when getting a next token and expecting one to be there because if the token stream
         // is out of tokens already it's a bug, not a normal error case
         let t = self.tokens.next().unwrap();
         // all statements start with a control word, so check what that is
         match &t.kind {
             // implicit args are one word, and can be parsed directly
-            TokenKind::Pop => Ok(Statement::Pop),
-            TokenKind::Dup => Ok(Statement::Dup),
-            TokenKind::Swap => Ok(Statement::Swap),
-            TokenKind::Add => Ok(Statement::Add),
-            TokenKind::Sub => Ok(Statement::Sub),
-            TokenKind::Div => Ok(Statement::Div),
-            TokenKind::Mult => Ok(Statement::Mult),
-            TokenKind::Mod => Ok(Statement::Mod),
-            TokenKind::Inc => Ok(Statement::Inc),
-            TokenKind::Dec => Ok(Statement::Dec),
-            TokenKind::And => Ok(Statement::And),
-            TokenKind::Or => Ok(Statement::Or),
-            TokenKind::Xor => Ok(Statement::Xor),
-            TokenKind::Bsl => Ok(Statement::Bsl),
-            TokenKind::Bsr => Ok(Statement::Bsr),
-            TokenKind::Rol => Ok(Statement::Rol),
-            TokenKind::Ror => Ok(Statement::Ror),
-            TokenKind::Eq => Ok(Statement::Eq),
-            TokenKind::Neq => Ok(Statement::Neq),
-            TokenKind::Lt => Ok(Statement::Lt),
-            TokenKind::Gt => Ok(Statement::Gt),
-            TokenKind::Leq => Ok(Statement::Leq),
-            TokenKind::Geq => Ok(Statement::Geq),
-            TokenKind::Ret => Ok(Statement::Ret),
+            TokenKind::Pop => Ok(Some(Statement::Pop)),
+            TokenKind::Dup => Ok(Some(Statement::Dup)),
+            TokenKind::Swap => Ok(Some(Statement::Swap)),
+            TokenKind::Add => Ok(Some(Statement::Add)),
+            TokenKind::Sub => Ok(Some(Statement::Sub)),
+            TokenKind::Div => Ok(Some(Statement::Div)),
+            TokenKind::Mult => Ok(Some(Statement::Mult)),
+            TokenKind::Mod => Ok(Some(Statement::Mod)),
+            TokenKind::Inc => Ok(Some(Statement::Inc)),
+            TokenKind::Dec => Ok(Some(Statement::Dec)),
+            TokenKind::And => Ok(Some(Statement::And)),
+            TokenKind::Or => Ok(Some(Statement::Or)),
+            TokenKind::Xor => Ok(Some(Statement::Xor)),
+            TokenKind::Bsl => Ok(Some(Statement::Bsl)),
+            TokenKind::Bsr => Ok(Some(Statement::Bsr)),
+            TokenKind::Rol => Ok(Some(Statement::Rol)),
+            TokenKind::Ror => Ok(Some(Statement::Ror)),
+            TokenKind::Eq => Ok(Some(Statement::Eq)),
+            TokenKind::Neq => Ok(Some(Statement::Neq)),
+            TokenKind::Lt => Ok(Some(Statement::Lt)),
+            TokenKind::Gt => Ok(Some(Statement::Gt)),
+            TokenKind::Leq => Ok(Some(Statement::Leq)),
+            TokenKind::Geq => Ok(Some(Statement::Geq)),
+            TokenKind::Ret => Ok(Some(Statement::Ret)),
 
             // explicit args need some more processing
             TokenKind::Const => {
@@ -179,7 +180,10 @@ impl<'a> Parser<'a> {
                     TokenKind::Name(s) => {
                         let kind = self.parse_type()?;
                         let value = self.parse_literal(kind)?;
-                        Ok(Statement::Const { name: s.to_string(), value })
+                        match self.constants.insert(s.to_string(), value) {
+                            None => Ok(None),
+                            Some(_) => Err(LogEvent { kind: EventKind::Error, msg: "illegal constant redefinition".to_string(), line: t.line, col: t.col })
+                        }
                     }
                     _ => {
                         Err(LogEvent { kind: EventKind::Error, msg: "expected a constant definition".to_string(), line: t.line, col: t.col })
@@ -191,35 +195,40 @@ impl<'a> Parser<'a> {
                 // next token can be either a name or a literal
                 let t = self.tokens.peek().unwrap();
                 match &t.kind {
-                    // if it is a name, consume the token, extract the name string and build the statement
+                    // if it is a name, consume the token, find the constant in your table, and generate the push command
                     TokenKind::Name(s) => { 
+                        let line = t.line;
+                        let col = t.col;
                         self.tokens.next();
-                        Ok(Statement::PushConst { name: s.to_string() })
+                        match self.constants.get(s) {
+                            Some(value) => Ok(Some(Statement::Push { value: *value })),
+                            None => Err(LogEvent { kind: EventKind::Error, msg: format!("constant \"{}\" was not defined", s), line, col })
+                        }
                     }
                     _ => {
                         // if it isn't a name but we were able to parse a literal out of
                         // it, build that literal token
                         let kind = self.parse_type()?;
                         let value = self.parse_literal(kind)?;
-                        Ok(Statement::PushLiteral { value })
+                        Ok(Some(Statement::Push { value } ))
                     }
                 }
             }
 
             TokenKind::Load => {
                 let kind = self.parse_type()?;
-                Ok(Statement::Load { kind })
+                Ok(Some(Statement::Load { kind }))
             }
 
             TokenKind::Store => {
                 let kind = self.parse_type()?;
-                Ok(Statement::Store { kind })
+                Ok(Some(Statement::Store { kind }))
             }
 
             TokenKind::Label => {
                 let t = self.tokens.next().unwrap();
                 match &t.kind {
-                    TokenKind::Name(s) => Ok(Statement::Label { name: s.to_string() }),
+                    TokenKind::Name(s) => Ok(Some(Statement::Label { name: s.to_string() })),
                     _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after label".to_string(), line: t.line, col: t.col })
                 }
             }
@@ -227,7 +236,7 @@ impl<'a> Parser<'a> {
             TokenKind::Jump => {
                 let t = self.tokens.next().unwrap();
                 match &t.kind {
-                    TokenKind::Name(s) => Ok(Statement::Jump { dest: s.to_string() }),
+                    TokenKind::Name(s) => Ok(Some(Statement::Jump { dest: s.to_string() })),
                     _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after jump".to_string(), line: t.line, col: t.col })
                 }
             }
@@ -235,7 +244,7 @@ impl<'a> Parser<'a> {
             TokenKind::Jumpif => {
                 let t = self.tokens.next().unwrap();
                 match &t.kind {
-                    TokenKind::Name(s) => Ok(Statement::Jumpif { dest: s.to_string() }),
+                    TokenKind::Name(s) => Ok(Some(Statement::Jumpif { dest: s.to_string() })),
                     _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after jump".to_string(), line: t.line, col: t.col })
                 }
             }
@@ -243,19 +252,19 @@ impl<'a> Parser<'a> {
             TokenKind::Call => {
                 let t = self.tokens.next().unwrap();
                 match &t.kind {
-                    TokenKind::Name(s) => Ok(Statement::Call { dest: s.to_string() }),
+                    TokenKind::Name(s) => Ok(Some(Statement::Call { dest: s.to_string() })),
                     _ => Err(LogEvent { kind: EventKind::Error, msg: "expected name after call".to_string(), line: t.line, col: t.col })
                 }
             }
 
             TokenKind::Cast => {
                 let to = self.parse_type()?;
-                Ok(Statement::Cast { to })
+                Ok(Some(Statement::Cast { to }))
             }
 
             TokenKind::Conv => {
                 let to = self.parse_type()?;
-                Ok(Statement::Conv { to })
+                Ok(Some(Statement::Conv { to }))
             }
 
             TokenKind::Unknown(s) => Err(LogEvent { kind: EventKind::Error, msg: format!("unknown token \"{}\"", s), line: t.line, col: t.col }),

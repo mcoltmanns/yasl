@@ -8,6 +8,9 @@ Programs consist of a series of statements.
 Statements are separated by newlines (\n).
 Lines starting with // are treated as comments and ignored.
 
+All programs must have an entry point labeled `main`.
+`main` must be a function terminated by a `ret`.
+
 ## Types
 - i8 i16 i32 i64
 - u8 u16 u32 u64
@@ -73,12 +76,13 @@ will leave 2 at the top of the stack (note argument order - rightmost first).
 - leq
 - gt
 - geq
-
-### Memory control
+#### Memory control
+Careful! These also consume data on the stack.
+E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u8 -> memory 2 contains 1
 - load <type>
-    - load the value pointed to by the top of the stack as <type>
+    - load the value pointed to by the top of the stack as <type> onto the top of the stack
 - store <type>
-    - store the value at the top of the stack to the location at the second position in the stack as <type>
+    - store the value at the top of the stack to the location at the second position in the stack
 
 ### Control flow
 - label <name>
@@ -87,6 +91,7 @@ will leave 2 at the top of the stack (note argument order - rightmost first).
     - jump to a label. Jumps may be forward or backward.
 - jumpif <name>
     - conditional jump. Consumes top, and jumps if not 0.
+    - jumpif can only operate on integer types (i or u)
 - call <name>
     - push the current execution location to the call stack and jump to the label.
 - ret

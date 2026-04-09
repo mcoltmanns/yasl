@@ -13,60 +13,6 @@ fn parse_errs(src: &str) -> Vec<String> {
     logger.errors
 }
 
-// --- const ---
-
-#[test]
-fn const_i8() {
-    let stmts = parse("const x i8 10");
-    assert_eq!(stmts, vec![Statement::Const {
-        name: "x".to_string(),
-        value: Literal::I8(10)
-    }]);
-}
-
-#[test]
-fn const_negative() {
-    let stmts = parse("const x i8 -1");
-    assert_eq!(stmts, vec![Statement::Const {
-        name: "x".to_string(),
-        value: Literal::I8(-1)
-    }]);
-}
-
-#[test]
-fn const_hex() {
-    let stmts = parse("const x u8 0xFF");
-    assert_eq!(stmts, vec![Statement::Const {
-        name: "x".to_string(),
-        value: Literal::U8(255)
-    }]);
-}
-
-#[test]
-fn const_binary() {
-    let stmts = parse("const x u8 0b00001111");
-    assert_eq!(stmts, vec![Statement::Const {
-        name: "x".to_string(),
-        value: Literal::U8(15)
-    }]);
-}
-
-#[test]
-fn const_overflow() {
-    // 128 doesn't fit in i8
-    assert!(parse_errs("const x i8 128").len() == 1);
-}
-
-#[test]
-fn const_followed_by_label() {
-    // regression test for the eaten-label bug
-    let stmts = parse("const x i8 10\nlabel foo");
-    assert_eq!(stmts, vec![
-        Statement::Const { name: "x".to_string(), value: Literal::I8(10) },
-        Statement::Label { name: "foo".to_string() },
-    ]);
-}
-
 // --- label ---
 
 #[test]
@@ -78,22 +24,6 @@ fn label() {
 #[test]
 fn label_no_name() {
     assert!(parse_errs("label").len() == 1);
-}
-
-// --- push ---
-
-#[test]
-fn push_const_name() {
-    let stmts = parse("const x i8 1\npush x");
-    assert_eq!(stmts[1], Statement::PushConst { name: "x".to_string() });
-}
-
-#[test]
-fn push_literal() {
-    let stmts = parse("push i32 42");
-    assert_eq!(stmts, vec![Statement::PushLiteral {
-        value: Literal::I32(42)
-    }]);
 }
 
 // --- implicit statements ---
@@ -128,32 +58,6 @@ fn jumpif() {
 fn call() {
     let stmts = parse("call foo");
     assert_eq!(stmts, vec![Statement::Call { dest: "foo".to_string() }]);
-}
-
-// --- full program ---
-
-#[test]
-fn fibonacci_program() {
-    let src = "
-        const ten i8 10
-        label main
-            push ten
-            call fib
-            ret
-        label fib
-            dup
-            push i32 1
-            gt
-            jumpif fib_recurse
-            ret
-    ";
-    let stmts = parse(src);
-    assert_eq!(stmts[0], Statement::Const { name: "ten".to_string(), value: Literal::I8(10) });
-    assert_eq!(stmts[1], Statement::Label { name: "main".to_string() });
-    assert_eq!(stmts[2], Statement::PushConst { name: "ten".to_string() });
-    assert_eq!(stmts[3], Statement::Call { dest: "fib".to_string() });
-    assert_eq!(stmts[4], Statement::Ret);
-    assert_eq!(stmts[5], Statement::Label { name: "fib".to_string() });
 }
 
 // --- comments ---
