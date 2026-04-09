@@ -1,5 +1,6 @@
 pub mod tokenizer;
 pub mod parser;
+//pub mod blocker;
 
 pub mod logger {
     pub enum EventKind {
@@ -55,4 +56,28 @@ pub mod logger {
             }
         }
     }
+}
+
+pub mod util {
+    use std::fmt::Display;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FilePos {
+        pub _name: String,
+        pub line: usize,
+        pub col: usize
+    }
+    impl Display for FilePos {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{} {}", self.line, self.col)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Positioned<T> {
+        pub content: T,
+        pub pos: FilePos
+    }
+    // don't impl display! we want users to implement own display traits because this prints super
+    // ugly
 }

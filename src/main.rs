@@ -16,11 +16,13 @@ fn main() {
         }
     };
 
-    let tokens = tokenizer::tokenize_program(&src_string);
+    let mut tokenizer = tokenizer::Tokenizer::new(&src_string);
+    let tokens = tokenizer.run();
 
-    let parsed = parser::parse_program(&tokens, &mut logger);
+    let mut parser = parser::Parser::new(tokens, &mut logger);
+    parser.parse_tokens();
 
-    for s in &parsed {
-        println!("{:?}", s);
+    for s in &parser.statements {
+        println!("{}", s);
     }
 }

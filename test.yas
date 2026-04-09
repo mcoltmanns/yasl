@@ -1,6 +1,5 @@
 // simple fibonacci test
 const ten i8 10
-const ten i8 9
 const sixty-5-k ptr 0xffff
 
 label main

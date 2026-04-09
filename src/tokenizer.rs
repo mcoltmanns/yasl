@@ -1,5 +1,8 @@
 use std::fmt::Display;
 
+use crate::util::{FilePos, Positioned};
+
+pub type Token = Positioned<TokenKind>;
 #[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
     Unknown(String),
@@ -52,31 +55,20 @@ pub enum TokenKind {
     FType(u8),
     PtrType
 }
-
-#[derive(Debug)]
-pub struct Token {
-    pub kind: TokenKind,
-    pub line: usize,
-    pub col: usize,
-}
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let info = match &self.kind {
-            TokenKind::Name(s) => s,
-            TokenKind::Literal(s) => s,
-            TokenKind::Unknown(s) => s,
-            _ => return write!(f, "{:?} {}:{}", self.kind, self.line, self.col)
+        let str = match &self.content {
+            TokenKind::Name(s) => format!("\"{}\"", s),
+            TokenKind::Literal(s) => format!("\"{}\"", s),
+            TokenKind::Unknown(s) => format!("\"{}\"", s),
+            _ => format!("{:?}", self.content)
         };
-        write!(f, "\"{}\" {}:{}", info, self.line, self.col)
+        write!(f, "{}", str)
     }
 }
 
-pub fn tokenize_program(source: &str) -> Vec<Token> {
-    Tokenizer::new(source).run()
-}
-
 #[derive(Debug)]
-struct Tokenizer<'a> {
+pub struct Tokenizer<'a> {
     source: &'a str,
     pos: usize,
     line: usize,
@@ -84,17 +76,17 @@ struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
-    fn new(source: &'a str) -> Self {
+    pub fn new(source: &'a str) -> Self {
         Tokenizer { source, pos: 0, line: 1, col: 1 }
     }
 
-    fn run(&mut self) -> Vec<Token> {
+    pub fn run(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
             self.consume_whitespace();
 
             let t = self.consume_token();
-            let done = t.kind == TokenKind::Eof;
+            let done = t.content == TokenKind::Eof;
             tokens.push(t);
             if done { break; }
         }
@@ -175,7 +167,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn construct_token(&self, kind: TokenKind) -> Token {
-        Token { kind, line: self.line, col: self.col }
+        Token { content: kind, pos: FilePos { _name: "".to_string(), line: self.line, col: self.col } }
     }
 
     fn construct_name_or_literal(&self, word: &str) -> Token {
