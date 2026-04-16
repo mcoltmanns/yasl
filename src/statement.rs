@@ -109,6 +109,14 @@ impl Statement {
         Statement { kind, pos }
     }
 
+    pub fn kind(&self) -> &StatementKind {
+        &self.kind
+    }
+
+    pub fn pos(&self) -> &FilePos {
+        &self.pos
+    }
+
     // typing information methods
     // these give type information that can be known at compile time
     pub fn inputs(&self) -> Vec<Option<DType>> {
