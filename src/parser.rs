@@ -4,112 +4,16 @@
 // makes sure literals are not too wide for the types of the constants they are associated with
 // does not do typechecking
 // does not build any symbol tables
-use std::fmt::{Display};
 use std::collections::HashMap;
-
 use half::f16;
-use crate::tokenizer::{Token, TokenKind};
+use crate::tokenizer::Token;
+use crate::tokenizer::TokenKind;
 use crate::logger::Logger;
-use crate::util::Positioned;
-
-// these are type annotations for memory instructions
-#[derive(PartialEq, Debug, Clone, Copy)]
-pub enum DType {
-    Pointer,
-    I8,
-    I16,
-    I32,
-    I64,
-    U8,
-    U16,
-    U32,
-    U64,
-    F16,
-    F32,
-    F64,
-}
-
-// these are typed values for literals
-pub type Literal = Positioned<LiteralKind>;
-#[derive(PartialEq, Debug, Clone, Copy)]
-pub enum LiteralKind {
-    Pointer(u64),
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    F16(f16),
-    F32(f32),
-    F64(f64),
-}
-impl Display for Literal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "literal {:?}", self.content)
-    }
-}
-
-// because the language is so flat, we really don't need much of a tree
-// we can get away with a single enum
-pub type Statement = Positioned<StatementKind>;
-#[derive(PartialEq, Debug, Clone)]
-pub enum StatementKind {
-    Push { value: Literal },
-    Pop,
-    Dup,
-    Swap,
-    Load { kind: DType },
-    Store { kind: DType },
-    Label { name: String },
-    Jump { dest: String },
-    Jumpif { dest: String },
-    Call { dest: String },
-    Ret,
-    Cast { to: DType },
-    Conv { to: DType },
-    Proc { name: String, t_in: Vec<DType>, t_out: Vec<DType> },
-
-    Add,
-    Sub,
-    Div,
-    Mult,
-    Mod,
-    Inc,
-    Dec,
-    And,
-    Or,
-    Xor,
-    Bsl,
-    Bsr,
-    Rol,
-    Ror,
-    Eq,
-    Neq,
-    Lt,
-    Leq,
-    Gt,
-    Geq,
-}
-impl Display for Statement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let opt = match &self.content {
-            StatementKind::Push { value } => format!("Push {}", value),
-            StatementKind::Load { kind } => format!("Load {:?}", kind),
-            StatementKind::Store { kind } => format!("Store {:?}", kind),
-            StatementKind::Label { name } => format!("Label {:?}", name),
-            StatementKind::Jump { dest } => format!("Jump {:?}", dest),
-            StatementKind::Jumpif { dest } => format!("Jumpif {:?}", dest),
-            StatementKind::Call { dest } => format!("Call {:?}", dest),
-            StatementKind::Cast { to } => format!("Cast {:?}", to),
-            StatementKind::Conv { to } => format!("Conv {:?}", to),
-            _ => format!("{:?}", self.content)
-        };
-        write!(f, "{}", opt)
-    }
-}
+use crate::statement::Statement;
+use crate::statement::DType;
+use crate::statement::StatementKind;
+use crate::statement::Literal;
+use crate::statement::LiteralValue;
 
 pub struct Parser<'a>{
     tokens: std::iter::Peekable<std::vec::IntoIter<Token>>,
@@ -156,32 +60,31 @@ impl<'a> Parser<'a> {
         // all statements start with a control word, so check what that is
         match t.content {
             // implicit args are one word, and can be parsed directly
-            TokenKind::Pop => self.statements.push(Statement { content: StatementKind::Pop, pos: t.pos }),
-            TokenKind::Dup => self.statements.push(Statement { content: StatementKind::Dup, pos: t.pos }),
-            TokenKind::Swap => self.statements.push(Statement { content: StatementKind::Swap, pos: t.pos }),
-            TokenKind::Add => self.statements.push(Statement { content: StatementKind::Add, pos: t.pos }),
-            TokenKind::Sub => self.statements.push(Statement { content: StatementKind::Sub, pos: t.pos }),
-            TokenKind::Div => self.statements.push(Statement { content: StatementKind::Div, pos: t.pos }),
-            TokenKind::Mult => self.statements.push(Statement { content: StatementKind::Mult, pos: t.pos }),
-            TokenKind::Mod => self.statements.push(Statement { content: StatementKind::Mod, pos: t.pos }),
-            TokenKind::Inc => self.statements.push(Statement { content: StatementKind::Inc, pos: t.pos }),
-            TokenKind::Dec => self.statements.push(Statement { content: StatementKind::Dec, pos: t.pos }),
-            TokenKind::And => self.statements.push(Statement { content: StatementKind::And, pos: t.pos }),
-            TokenKind::Or => self.statements.push(Statement { content: StatementKind::Or, pos: t.pos }),
-            TokenKind::Xor => self.statements.push(Statement { content: StatementKind::Xor, pos: t.pos }),
-            TokenKind::Bsl => self.statements.push(Statement { content: StatementKind::Bsl, pos: t.pos }),
-            TokenKind::Bsr => self.statements.push(Statement { content: StatementKind::Bsr, pos: t.pos }),
-            TokenKind::Rol => self.statements.push(Statement { content: StatementKind::Rol, pos: t.pos }),
-            TokenKind::Ror => self.statements.push(Statement { content: StatementKind::Ror, pos: t.pos }),
-            TokenKind::Eq => self.statements.push(Statement { content: StatementKind::Eq, pos: t.pos }),
-            TokenKind::Neq => self.statements.push(Statement { content: StatementKind::Neq, pos: t.pos }),
-            TokenKind::Lt => self.statements.push(Statement { content: StatementKind::Lt, pos: t.pos }),
-            TokenKind::Gt => self.statements.push(Statement { content: StatementKind::Gt, pos: t.pos }),
-            TokenKind::Leq => self.statements.push(Statement { content: StatementKind::Leq, pos: t.pos }),
-            TokenKind::Geq => self.statements.push(Statement { content: StatementKind::Geq, pos: t.pos }),
-            TokenKind::Ret => self.statements.push(Statement { content: StatementKind::Ret, pos: t.pos }),
+            TokenKind::Pop => self.statements.push(Statement::new(StatementKind::Pop, t.pos)),
+            TokenKind::Dup => self.statements.push(Statement::new(StatementKind::Dup, t.pos)),
+            TokenKind::Swap => self.statements.push(Statement::new(StatementKind::Swap, t.pos)),
+            TokenKind::Add => self.statements.push(Statement::new(StatementKind::Add, t.pos)),
+            TokenKind::Sub => self.statements.push(Statement::new(StatementKind::Sub, t.pos)),
+            TokenKind::Div => self.statements.push(Statement::new(StatementKind::Div, t.pos)),
+            TokenKind::Mult => self.statements.push(Statement::new(StatementKind::Mult, t.pos)),
+            TokenKind::Mod => self.statements.push(Statement::new(StatementKind::Mod, t.pos)),
+            TokenKind::Inc => self.statements.push(Statement::new(StatementKind::Inc, t.pos)),
+            TokenKind::Dec => self.statements.push(Statement::new(StatementKind::Dec, t.pos)),
+            TokenKind::And => self.statements.push(Statement::new(StatementKind::And, t.pos)),
+            TokenKind::Or => self.statements.push(Statement::new(StatementKind::Or, t.pos)),
+            TokenKind::Xor => self.statements.push(Statement::new(StatementKind::Xor, t.pos)),
+            TokenKind::Bsl => self.statements.push(Statement::new(StatementKind::Bsl, t.pos)),
+            TokenKind::Bsr => self.statements.push(Statement::new(StatementKind::Bsr, t.pos)),
+            TokenKind::Rol => self.statements.push(Statement::new(StatementKind::Rol, t.pos)),
+            TokenKind::Ror => self.statements.push(Statement::new(StatementKind::Ror, t.pos)),
+            TokenKind::Eq => self.statements.push(Statement::new(StatementKind::Eq, t.pos)),
+            TokenKind::Neq => self.statements.push(Statement::new(StatementKind::Neq, t.pos)),
+            TokenKind::Lt => self.statements.push(Statement::new(StatementKind::Lt, t.pos)),
+            TokenKind::Gt => self.statements.push(Statement::new(StatementKind::Gt, t.pos)),
+            TokenKind::Leq => self.statements.push(Statement::new(StatementKind::Leq, t.pos)),
+            TokenKind::Geq => self.statements.push(Statement::new(StatementKind::Geq, t.pos)),
+            TokenKind::Ret => self.statements.push(Statement::new(StatementKind::Ret, t.pos)),
 
-            // explicit args need some more processing
             TokenKind::Const => {
                 let t = self.tokens.next().unwrap();
                 match t.content {
@@ -213,7 +116,7 @@ impl<'a> Parser<'a> {
                     TokenKind::Name(s) => { 
                         match self.constants.get(s) {
                             Some(value) => {
-                                self.statements.push(Statement { content: StatementKind::Push { value: value.clone() }, pos  });
+                                self.statements.push(Statement::new(StatementKind::Push { value: value.clone() }, pos));
                             }
                             None => {
                                 self.logger.error(format!("constant \"{}\" was not defined", s), pos.line, pos.col );
@@ -233,7 +136,7 @@ impl<'a> Parser<'a> {
                         if value.is_none() {
                             return;
                         }
-                        self.statements.push(Statement {content: StatementKind::Push { value: value.unwrap() }, pos});
+                        self.statements.push(Statement::new(StatementKind::Push { value: value.unwrap() }, pos));
                     }
                 }
             }
@@ -243,7 +146,7 @@ impl<'a> Parser<'a> {
                 if kind.is_none () {
                     return;
                 }
-                self.statements.push(Statement { content: StatementKind::Load { kind: kind.unwrap() }, pos: t.pos });
+                self.statements.push(Statement::new(StatementKind::Load { kind: kind.unwrap() }, t.pos));
             }
 
             TokenKind::Store => {
@@ -251,14 +154,14 @@ impl<'a> Parser<'a> {
                 if kind.is_none () {
                     return;
                 }
-                self.statements.push(Statement { content: StatementKind::Store { kind: kind.unwrap() }, pos: t.pos });
+                self.statements.push(Statement::new(StatementKind::Store { kind: kind.unwrap() }, t.pos));
             }
 
             TokenKind::Label => {
                 let t = self.tokens.next().unwrap();
                 match t.content {
                     TokenKind::Name(s) => {
-                        self.statements.push(Statement { content: StatementKind::Label { name: s.to_string() }, pos: t.pos });
+                        self.statements.push(Statement::new(StatementKind::Label { name: s.to_string() }, t.pos));
                     }
                     _ => {
                         self.logger.error("expected name after label".to_string(), t.pos.line, t.pos.col);
@@ -270,7 +173,7 @@ impl<'a> Parser<'a> {
                 let t = self.tokens.next().unwrap();
                 match t.content {
                     TokenKind::Name(s) => {
-                        self.statements.push(Statement { content: StatementKind::Jump { dest: s.to_string() }, pos: t.pos });
+                        self.statements.push(Statement::new(StatementKind::Jump { dest: s.to_string() }, t.pos));
                     }
                     _ => {
                         self.logger.error("expected label after jump".to_string(), t.pos.line, t.pos.col);
@@ -282,7 +185,7 @@ impl<'a> Parser<'a> {
                 let t = self.tokens.next().unwrap();
                 match t.content {
                     TokenKind::Name(s) => {
-                        self.statements.push(Statement { content: StatementKind::Jumpif { dest: s.to_string() }, pos: t.pos });
+                        self.statements.push(Statement::new(StatementKind::Jumpif { dest: s.to_string() }, t.pos));
                     }
                     _ => {
                         self.logger.error("expected label after jump".to_string(), t.pos.line, t.pos.col);
@@ -307,7 +210,7 @@ impl<'a> Parser<'a> {
                             return;
                         }
                         self.expect(TokenKind::Def);
-                        self.statements.push(Statement { content: StatementKind::Proc { name: s, t_in: ins.unwrap(), t_out: outs.unwrap() }, pos: t.pos });
+                        self.statements.push(Statement::new(StatementKind::Proc { name: s, t_in: ins.unwrap(), t_out: outs.unwrap() }, t.pos));
                     }
                     _ => {
                         self.logger.error("expected procedure name".to_string(), t.pos.line, t.pos.col);
@@ -319,7 +222,7 @@ impl<'a> Parser<'a> {
                 let t = self.tokens.next().unwrap();
                 match t.content {
                     TokenKind::Name(s) => {
-                        self.statements.push(Statement { content: StatementKind::Call { dest: s.to_string() }, pos: t.pos });
+                        self.statements.push(Statement::new(StatementKind::Call { dest: s.to_string() }, t.pos));
                     }
                     _ => {
                         self.logger.error("expected label after call".to_string(), t.pos.line, t.pos.col);
@@ -332,7 +235,7 @@ impl<'a> Parser<'a> {
                 if to.is_none() {
                     return;
                 }
-                self.statements.push(Statement { content: StatementKind::Cast { to: to.unwrap() }, pos: t.pos });
+                self.statements.push(Statement::new(StatementKind::Cast { to: to.unwrap() }, t.pos));
             }
 
             TokenKind::Conv => {
@@ -340,7 +243,7 @@ impl<'a> Parser<'a> {
                 if to.is_none() {
                     return;
                 }
-                self.statements.push(Statement { content: StatementKind::Conv { to: to.unwrap() }, pos: t.pos });
+                self.statements.push(Statement::new(StatementKind::Conv { to: to.unwrap() }, t.pos));
             }
 
             TokenKind::Unknown(s) => {
@@ -391,25 +294,25 @@ impl<'a> Parser<'a> {
                     };
 
                 let res = match into {
-                    DType::I8 => i8::from_str_radix(repr, radix).map(LiteralKind::I8).map_err(|e| e.to_string()),
-                    DType::I16 => i16::from_str_radix(repr, radix).map(LiteralKind::I16).map_err(|e| e.to_string()),
-                    DType::I32 => i32::from_str_radix(repr, radix).map(LiteralKind::I32).map_err(|e| e.to_string()),
-                    DType::I64 => i64::from_str_radix(repr, radix).map(LiteralKind::I64).map_err(|e| e.to_string()),
-                    DType::U8 => u8::from_str_radix(repr, radix).map(LiteralKind::U8).map_err(|e| e.to_string()),
-                    DType::U16 => u16::from_str_radix(repr, radix).map(LiteralKind::U16).map_err(|e| e.to_string()),
-                    DType::U32 => u32::from_str_radix(repr, radix).map(LiteralKind::U32).map_err(|e| e.to_string()),
-                    DType::U64 => u64::from_str_radix(repr, radix).map(LiteralKind::U64).map_err(|e| e.to_string()),
-                    DType::F16 => repr.parse::<f16>().map(LiteralKind::F16).map_err(|e| e.to_string()),
-                    DType::F32 => repr.parse::<f32>().map(LiteralKind::F32).map_err(|e| e.to_string()),
-                    DType::F64 => repr.parse::<f64>().map(LiteralKind::F64).map_err(|e| e.to_string()),
-                    DType::Pointer => u64::from_str_radix(repr, radix).map(LiteralKind::Pointer).map_err(|e| e.to_string()),
+                    DType::I8 => i8::from_str_radix(repr, radix).map(LiteralValue::I8).map_err(|e| e.to_string()),
+                    DType::I16 => i16::from_str_radix(repr, radix).map(LiteralValue::I16).map_err(|e| e.to_string()),
+                    DType::I32 => i32::from_str_radix(repr, radix).map(LiteralValue::I32).map_err(|e| e.to_string()),
+                    DType::I64 => i64::from_str_radix(repr, radix).map(LiteralValue::I64).map_err(|e| e.to_string()),
+                    DType::U8 => u8::from_str_radix(repr, radix).map(LiteralValue::U8).map_err(|e| e.to_string()),
+                    DType::U16 => u16::from_str_radix(repr, radix).map(LiteralValue::U16).map_err(|e| e.to_string()),
+                    DType::U32 => u32::from_str_radix(repr, radix).map(LiteralValue::U32).map_err(|e| e.to_string()),
+                    DType::U64 => u64::from_str_radix(repr, radix).map(LiteralValue::U64).map_err(|e| e.to_string()),
+                    DType::F16 => repr.parse::<f16>().map(LiteralValue::F16).map_err(|e| e.to_string()),
+                    DType::F32 => repr.parse::<f32>().map(LiteralValue::F32).map_err(|e| e.to_string()),
+                    DType::F64 => repr.parse::<f64>().map(LiteralValue::F64).map_err(|e| e.to_string()),
+                    DType::Pointer => u64::from_str_radix(repr, radix).map(LiteralValue::Pointer).map_err(|e| e.to_string()),
                 };
                 if let Err(msg) = res {
                     self.logger.error(msg, t.pos.line, t.pos.col);
                     None
                 }
                 else {
-                    Some(Literal { content: res.unwrap(), pos: t.pos })
+                    Some(Literal::new(res.unwrap(), t.pos))
                 }
             }
             _ => {
