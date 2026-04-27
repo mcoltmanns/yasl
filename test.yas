@@ -1,7 +1,11 @@
+const one i32 1
+push one
+jump main
+
 proc fib in i32 out i32 def
     // stack: n
     dup
-    push i32 1
+    push one
     leq
     jumpif fib_base     // if n <= 1 return n
 
@@ -22,8 +26,9 @@ proc fib in i32 out i32 def
     label fib_base
         ret             // stack: n (which is 0 or 1)
 
-proc main in out def
-    push i32 10
-    call fib
-    // fib(10) = 55
-    ret
+//proc main in out def
+//    push i32 10
+//    call fib
+//    // fib(10) = 55
+//    ret
+    

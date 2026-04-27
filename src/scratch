@@ -1,0 +1,12 @@
+after parsing:
+
+1) Build procedure table
+- first pass: collect procedure declarations/signatures (names, inputs, outputs)
+- second pass: define procedures
+
+2) Define procedures
+- procedure definition means building the jump tables and basic blocks that compose a procedure
+- you will need two passes, since jumps can be bidirectional
+- first pass builds jump table and blocks
+- second pass does typechecks, over/underflow checks, jump checks, etc
+- remember jumps may not pass procedure boundaries

@@ -61,7 +61,7 @@ pub enum LiteralValue {
     F64(f64),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StatementKind {
     Push { value: Literal },
     Pop,
@@ -100,6 +100,7 @@ pub enum StatementKind {
     Geq,
 }
 
+#[derive(Clone)]
 pub struct Statement {
     kind: StatementKind,
     pos: FilePos,

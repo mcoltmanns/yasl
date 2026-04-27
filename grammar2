@@ -1,0 +1,63 @@
+program -> { procedure } EOF
+
+procedure -> 'proc' name 'in' { name } 'out' { name } 'dec' { statement }
+
+statement -> ( instruction | constant | comment )
+
+comment -> '/' '/' <anything>
+
+constant -> 'const' name type literal
+
+instruction -> 'push' (name | type literal) -- type name | literal here because the compiler needs to know how to annotate the value on the stack, and does not infer from literals
+    | 'pop'
+    | 'dup'
+    | 'swap'
+    | 'add'
+    | 'sub'
+    | 'div'
+    | 'mult'
+    | 'mod'
+    | 'inc'
+    | 'dec'
+    | 'and'
+    | 'or'
+    | 'xor'
+    | 'bsl'
+    | 'bsr'
+    | 'rol'
+    | 'ror'
+    | 'eq'
+    | 'neq'
+    | 'lt'
+    | 'leq'
+    | 'gt'
+    | 'geq'
+    | 'load' type
+    | 'store' type
+    | 'label' name
+    | 'jump' name
+    | 'jumpif' name
+    | 'call' name
+    | 'ret'
+    | 'cast' type
+    | 'conv' type
+
+type -> itype | utype | ftype | 'ptr'
+
+itype -> 'i8' | 'i16' | 'i32' | 'i64'
+
+utype -> 'u8' | 'u16' | 'u32' | 'u64'
+
+ftype -> 'f16' | 'f32' | 'f64'
+
+name -> alpha { alpha | digit | '_' }
+
+literal -> dec_literal | hex_literal | bin_literal | float_literal
+
+dec_literal -> [ '-' ] digit { digit }
+
+hex_literal -> '0x' hex_digit { hex_digit }
+
+bin_literal -> '0b' ( '0' | '1' ) { ( '0' | '1' ) }
+
+float_literal -> '0f' [ '-' ] digit { digit } '.' digit { digit }

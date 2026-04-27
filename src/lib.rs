@@ -1,6 +1,8 @@
 pub mod tokenizer;
 pub mod parser;
 pub mod statement;
+pub mod procedure;
+pub mod basicblock;
 
 pub mod logger {
     pub enum EventKind {
