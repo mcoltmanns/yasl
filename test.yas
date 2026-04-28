@@ -26,9 +26,11 @@ proc fib in i32 out i32 def
     label fib_base
         ret             // stack: n (which is 0 or 1)
 
-//proc main in out def
-//    push i32 10
-//    call fib
-//    // fib(10) = 55
-//    ret
+proc main in out def
+    jump somewhere
+    label somewhere
+    push i32 10
+    call fib
+    // fib(10) = 55
+    ret
     

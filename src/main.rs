@@ -72,10 +72,14 @@ fn main() {
         logger.error("no main procedure defined".to_string(), 0, 0);
     }
 
-    for p in procedure_table.values() {
+    for p in procedure_table.values_mut() {
+        p.build_jumps_and_blocks(&mut logger);
         println!("{} {:?} {:?}", p.name(), p.get_intypes(), p.get_outtypes());
-        for s in p.statements() {
+        for s in p.get_statements() {
             println!("  {}", s);
+        }
+        for (i, b) in p.get_blocks().iter().enumerate() {
+            println!("  Basic block {} begins at statement {} and has length {}", i, b.start, b.length);
         }
     }
 
