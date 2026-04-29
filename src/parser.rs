@@ -72,6 +72,7 @@ impl<'a> Parser<'a> {
             TokenKind::Dec => self.statements.push(Statement::new(StatementKind::Dec, t.pos)),
             TokenKind::And => self.statements.push(Statement::new(StatementKind::And, t.pos)),
             TokenKind::Or => self.statements.push(Statement::new(StatementKind::Or, t.pos)),
+            TokenKind::Not => self.statements.push(Statement::new(StatementKind::Not, t.pos)),
             TokenKind::Xor => self.statements.push(Statement::new(StatementKind::Xor, t.pos)),
             TokenKind::Bsl => self.statements.push(Statement::new(StatementKind::Bsl, t.pos)),
             TokenKind::Bsr => self.statements.push(Statement::new(StatementKind::Bsr, t.pos)),

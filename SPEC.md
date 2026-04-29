@@ -64,6 +64,7 @@ will leave 2 at the top of the stack (note argument order - rightmost first).
 #### Bitwise
 - and
 - or
+- not
 - xor
 - bsl
 - bsr

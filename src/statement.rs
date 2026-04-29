@@ -87,6 +87,7 @@ pub enum StatementKind {
     Dec,
     And,
     Or,
+    Not,
     Xor,
     Bsl,
     Bsr,
