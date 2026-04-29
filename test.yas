@@ -28,9 +28,12 @@ proc fib in i32 out i32 def
 
 proc main in out def
     jump somewhere
-    label somewhere
+    label real
     push i32 10
     call fib
+    call fizz
     // fib(10) = 55
     ret
+    label somewhere
+    jump real
     

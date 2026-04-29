@@ -32,16 +32,47 @@ pub mod logger {
         fn info(&mut self, msg: String) {
             self.log(LogEvent { kind: EventKind::Info, msg, line: 0, col: 0 });
         }
+
+        fn has_error(self) -> bool;
+
+        fn has_warning(self) -> bool;
     }
 
-    pub struct StdoutLogger;
+    pub struct StdoutLogger {
+        errored: bool,
+        warned: bool,
+    }
+    impl StdoutLogger {
+        pub fn new() -> StdoutLogger {
+            StdoutLogger { errored: false, warned: false }
+        }
+    }
+    impl Default for StdoutLogger {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
     impl Logger for StdoutLogger {
         fn log(&mut self, event: LogEvent) {
             match event.kind {
-                EventKind::Error => println!("error at {}:{}: {}", event.line, event.col, event.msg),
-                EventKind::Warning => println!("warning at {}:{}: {}", event.line, event.col, event.msg),
+                EventKind::Error => {
+                    println!("error at {}:{}: {}", event.line, event.col, event.msg);
+                    self.errored = true;
+                }
+                EventKind::Warning => { 
+                    println!("warning at {}:{}: {}", event.line, event.col, event.msg);
+                    self.warned = true;
+                }
                 EventKind::Info => println!("info: {}", event.msg),
             }
+        }
+
+        fn has_error(self) -> bool {
+            self.errored
+        }
+
+        fn has_warning(self) -> bool {
+            self.warned
         }
     }
 
@@ -56,6 +87,14 @@ pub mod logger {
                 EventKind::Warning => self.warnings.push(format!("warning at {}:{}: {}", event.line, event.col, event.msg)),
                 EventKind::Info => {}
             }
+        }
+
+        fn has_error(self) -> bool {
+            self.errors.len() > 0
+        }
+
+        fn has_warning(self) -> bool {
+            self.warnings.len() > 0
         }
     }
 }
