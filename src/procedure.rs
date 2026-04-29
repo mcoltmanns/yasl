@@ -7,6 +7,7 @@ use crate::statement::Statement;
 use crate::statement::StatementKind;
 use crate::logger::Logger;
 use crate::basicblock::BasicBlock;
+use crate::util::FilePos;
 
 pub type ProcedureTable = HashMap<String, Procedure>;
 pub type SignatureTable = HashMap<String, (Vec<DType>, Vec<DType>)>;
@@ -54,7 +55,9 @@ impl Procedure {
         &self.statements
     }
 
-    pub fn check_block(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
+    pub fn simulate_block_types(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
+        // this simulates types on the procedure stack for this block
+        // cannot fully resolve, that is done during propagation
         let b = &mut self.blocks[b_i];
         let statements = &self.statements[b.start..b.start+b.length];
         let mut tracking: Vec<TypeStackEntry> = vec![];
@@ -62,7 +65,7 @@ impl Procedure {
         // the constraints array
         // each element represents a pair of types which must be equal when resolution is complete
         // as resolution progresses, these things can be resolved as the entry vector fills in
-        let mut constraints: Vec<(TypeStackEntry, TypeStackEntry)> = vec![];
+        let mut constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)> = vec![];
 
         // pops from the tracking stack
         // if there was something there, returns that
@@ -116,7 +119,7 @@ impl Procedure {
                     let a = pop_from_tracking(&mut tracking, &mut entry);
                     let b = pop_from_tracking(&mut tracking, &mut entry);
                     // add to the constraint array
-                    constraints.push((a.clone(), b.clone()));
+                    constraints.push((a.clone(), b.clone(), s.pos().clone()));
                     // try to resolve the output type
                     // if a or b are known, use that
                     // otherwise depend on whatever the first arg depended on
@@ -136,7 +139,7 @@ impl Procedure {
                 StatementKind::Load { kind } => {
                     // the pointer must be a pointer
                     let ptr = pop_from_tracking(&mut tracking, &mut entry);
-                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer)));
+                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer), s.pos().clone()));
                     tracking.push(TypeStackEntry::Known(kind.clone()));
                 }
                 // store has 2 args: thing to store, and pointer to store it at
@@ -144,8 +147,8 @@ impl Procedure {
                     let thing = pop_from_tracking(&mut tracking, &mut entry);
                     let ptr = pop_from_tracking(&mut tracking, &mut entry);
                     // thing must be kind, and ptr must be a pointer
-                    constraints.push((thing, TypeStackEntry::Known(kind.clone())));
-                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer)));
+                    constraints.push((thing, TypeStackEntry::Known(kind.clone()), s.pos().clone()));
+                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer), s.pos().clone()));
                 }
                 // cast and conv require one thing and leave the thing they cast or convert to
                 StatementKind::Cast { to } | StatementKind::Conv { to } => {
@@ -162,9 +165,10 @@ impl Procedure {
                         // push i32
                         // push f16
                         // call foo
+                        // first simulate the inputs
                         for input in inputs.iter().rev() {
                             let top = pop_from_tracking(&mut tracking, &mut entry);
-                            constraints.push((top, TypeStackEntry::Known(input.clone())));
+                            constraints.push((top, TypeStackEntry::Known(input.clone()), s.pos().clone()));
                         }
                         // same thing for outputs
                         for output in outputs.iter().rev() {
@@ -181,10 +185,27 @@ impl Procedure {
                     let cond = pop_from_tracking(&mut tracking, &mut entry);
                     // we don't have a specific integer type, so just push an i32 and handle this
                     // during propagation later
-                    constraints.push((cond, TypeStackEntry::Known(DType::I32)));
+                    constraints.push((cond, TypeStackEntry::Known(DType::I32), s.pos().clone()));
                 }
-                // none of the other things touch the data stack
-                StatementKind::Label { .. } | StatementKind::Jump { .. } | StatementKind::Ret | StatementKind::Proc { .. } => {}
+                // if we arrive at a return statement, we expect the output types of this procedure
+                // to be on the stack
+                // doing it this way has the consequence that blocks which end in rec always have
+                // no output
+                StatementKind::Ret => {
+                    // check that all of the types we want to return are available on the
+                    // procedure stack
+                    for output in self.outputs.iter().rev() {
+                        let top = pop_from_tracking(&mut tracking, &mut entry);
+                        constraints.push((top, TypeStackEntry::Known(output.clone()), s.pos().clone()));
+                    }
+                    // because this is the return, we also expect that the tracking stack is
+                    // empty
+                    if !tracking.is_empty() {
+                        logger.error(format!("procedure returns with {} extra value{} on stack", tracking.len(), if tracking.len() > 1 { 's' } else { '\0' }), s.pos().line, s.pos().col);
+                    }
+                }
+                // none of the other things have an effect on the local data stack
+                StatementKind::Label { .. } | StatementKind::Jump { .. } | StatementKind::Proc { .. } => {}
             };
         }
 

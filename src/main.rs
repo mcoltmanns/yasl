@@ -81,7 +81,7 @@ fn main() {
     // check types for each procedure
     for p in procedure_table.values_mut() {
         for i in 0..p.get_blocks().len() {
-            p.check_block(i, &signature_table, &mut logger);
+            p.simulate_block_types(i, &signature_table, &mut logger);
         }
     }
 

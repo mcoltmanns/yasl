@@ -1,4 +1,4 @@
-use crate::statement::DType;
+use crate::{statement::DType, util::FilePos};
 
 #[derive(Clone, Debug)]
 pub enum TypeStackEntry {
@@ -27,7 +27,7 @@ pub struct BasicBlock {
     // the constraints array is built during block-local analysis
     // each element represents a pair of types which must be equal when resolved
     // they are resolved according to the entry vector
-    pub constraints: Vec<(TypeStackEntry, TypeStackEntry)>
+    pub constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)>
 }
 
 impl BasicBlock {
