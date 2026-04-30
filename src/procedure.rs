@@ -214,9 +214,15 @@ impl Procedure {
         b.constraints = constraints;
     }
 
+    pub fn resolve_types(&mut self, logger: &mut dyn Logger) {
+        // resolving types in a procedure
+        //
+    }
+
     pub fn build_jumps_and_blocks(&mut self, logger: &mut dyn Logger) {
         // this is the first procedural definition pass
         // it builds the jump table and blocks out the statements into basic blocks
+        // it also sets the predecessor and successor lists for each block
         // first we have to build the basic blocks, since the jump table maps label names to
         // basic block vector indices
         let mut current_block: Option<BasicBlock> = None;
@@ -272,6 +278,67 @@ impl Procedure {
         if let Some(mut last_block) = current_block.take() {
             last_block.length = self.statements.len() - last_block.start;
             self.blocks.push(last_block);
+        }
+    }
+
+    pub fn link_blocks(&mut self, logger: &mut dyn Logger) {
+        // once we know the jump table we can link the blocks together by setting their
+        // predecessors/successors
+        // just go block by block and see where the labels go
+        // we have do this after jump table definition pass because labels are use before define
+        // to keep the borrow checker from complaining, first collect edges then apply them to the
+        // lists
+        let mut edges: Vec<(usize, usize)> = vec![];
+        for (b_id, b) in self.blocks.iter().enumerate() {
+            // only the last statement in a block determines successors
+            let s = &self.statements[b.start + b.length - 1];
+            match s.kind() {
+                // jumps are succeeded by the block they call
+                StatementKind::Jump { dest } => {
+                    if let Some(successor_id) = self.get_jump(dest) {
+                        edges.push((b_id, *successor_id));
+                    }
+                    else {
+                        logger.error(format!("label \"{}\" undefined in procedure \"{}\"", dest, self.name), s.pos().line, s.pos().col);
+                    }
+                }
+                // jumpifs are succeeded by the block they call, or the block after them
+                // (fallthrough)
+                StatementKind::Jumpif { dest } => {
+                    if let Some(successor_id) = self.get_jump(dest) {
+                        edges.push((b_id, *successor_id));
+                    }
+                    else {
+                        logger.error(format!("label \"{}\" undefined in procedure \"{}\"", dest, self.name), s.pos().line, s.pos().col);
+                    }
+                    // if there are blocks left, everything ok. otherwise throw err
+                    let next_id = b_id + 1;
+                    if next_id < self.blocks.len() {
+                        edges.push((b_id, next_id));
+                    }
+                    else {
+                        logger.error("no fallthrough block after conditional jump".to_string(), s.pos().line, s.pos().col);
+                    }
+                }
+                // rets have no successors
+                StatementKind::Ret => {}
+                // anything else is succeeded by the block after it
+                _ => {
+                    // if there are blocks left, everything ok
+                    // otherwise you might be missing a return instruction, but this can only be
+                    // checked conclusively during propagation
+                    // so we don't throw an error yet
+                    let next_id = b_id + 1;
+                    if next_id < self.blocks.len() {
+                        edges.push((b_id, next_id));
+                    }
+                }
+            }
+        }
+
+        for (from, to) in edges {
+            self.blocks[from].successors.insert(to);
+            self.blocks[to].predecessors.insert(from);
         }
     }
 }

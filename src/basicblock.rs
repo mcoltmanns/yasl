@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{statement::DType, util::FilePos};
 
 #[derive(Clone, Debug)]
@@ -14,9 +16,9 @@ pub struct BasicBlock {
     // how many statements are in this block?
     pub length: usize,
     // indices of the blocks that precede this one in its procedure
-    pub predecessors: Vec<usize>,
+    pub predecessors: HashSet<usize>,
     // ditto for successors
-    pub successors: Vec<usize>,
+    pub successors: HashSet<usize>,
 
     // typing information
     // a block needs certain types on the stack at entry in order to function
@@ -32,6 +34,6 @@ pub struct BasicBlock {
 
 impl BasicBlock {
     pub fn new(start: usize, length: usize) -> BasicBlock {
-        BasicBlock { start, length, predecessors: vec![], successors: vec![], entry_stack: vec![], exit_stack: vec![], constraints: vec![] }
+        BasicBlock { start, length, predecessors: HashSet::new(), successors: HashSet::new(), entry_stack: vec![], exit_stack: vec![], constraints: vec![] }
     }
 }

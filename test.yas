@@ -2,6 +2,17 @@ const one i32 1
 push one
 jump main
 
+proc main in out def
+    jump somewhere
+    label real
+    push i32 10
+    call fib
+    pop
+    // fib(10) = 55
+    ret
+    label somewhere
+    jump real
+
 proc fib in i32 out i32 def
     // stack: n
     dup
@@ -26,14 +37,7 @@ proc fib in i32 out i32 def
     label fib_base
         ret             // stack: n (which is 0 or 1)
 
-proc main in out def
-    jump somewhere
-    label real
-    push i32 10
-    call fib
-    call fizz
-    // fib(10) = 55
-    ret
-    label somewhere
-    jump real
+proc loop in out def
+    label loop
+    jump loop
     

@@ -73,16 +73,22 @@ fn main() {
         logger.error("no main procedure defined".to_string(), 0, 0);
     }
 
-    // build blocks for each procedure table
+    // procedure-local analysis
+    // build procedure jump table and blocks
+    // and simulate type stack within the procedure
     for p in procedure_table.values_mut() {
+        // build jump table
         p.build_jumps_and_blocks(&mut logger);
-    }
-
-    // check types for each procedure
-    for p in procedure_table.values_mut() {
+        // link blocks in procedure
+        p.link_blocks(&mut logger);
+        // block-local type analysis
         for i in 0..p.get_blocks().len() {
             p.simulate_block_types(i, &signature_table, &mut logger);
         }
+        // procedure-local type resolution
+        // because we have fixpoints for types in a procedure signature, all type
+        // resolution can take place at the procedural level
+        p.resolve_types(&mut logger);
     }
 
     for p in procedure_table.values() {
@@ -92,6 +98,8 @@ fn main() {
         }
         for (i, b) in p.get_blocks().iter().enumerate() {
             println!("  Basic block {} begins at statement {} and has length {}", i, b.start, b.length);
+            println!("    Predecessors are: {:?}", b.predecessors);
+            println!("    Successors are: {:?}", b.successors);
             println!("    Unresolved inputs are: {:?}", b.entry_stack);
             println!("    Unresolved outputs are: {:?}", b.exit_stack);
             println!("    Constraints are: {:?}", b.constraints);
