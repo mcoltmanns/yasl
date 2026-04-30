@@ -20,6 +20,7 @@ instruction -> 'push' (name | type literal) -- type name | literal here because 
     | 'dec'
     | 'and'
     | 'or'
+    | 'not'
     | 'xor'
     | 'bsl'
     | 'bsr'
@@ -40,7 +41,7 @@ instruction -> 'push' (name | type literal) -- type name | literal here because 
     | 'ret'
     | 'cast' type
     | 'conv' type
-    | 'proc' name 'in' [ name ] out [ name ]
+    | 'proc' name 'in' [ name ] out [ name ] def
 
 type -> itype | utype | ftype | 'ptr'
 
@@ -60,4 +61,4 @@ hex_literal -> '0x' hex_digit { hex_digit }
 
 bin_literal -> '0b' ( '0' | '1' ) { ( '0' | '1' ) }
 
-float_literal -> '0f' [ '-' ] digit { digit } '.' digit { digit }
+float_literal -> [ '-' ] digit { digit } '.' digit { digit }
