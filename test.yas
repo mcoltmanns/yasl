@@ -1,43 +1,41 @@
-const one i32 1
-push one
-jump main
+// fibonacci sequence
+// recursive implementation
+// fib(0) = 0, fib(1) = 1, fib(n) = fib(n-1) + fib(n-2)
 
-proc main in out def
-    jump somewhere
-    label real
-    push i32 10
-    call fib
-    pop
-    // fib(10) = 55
-    ret
-    label somewhere
-    jump real
+const flit f32 1.0
+const blit u8 0b00000001
+const hlit i8 0xAA
 
 proc fib in i32 out i32 def
     // stack: n
+    // base case: n <= 1, return n
     dup
-    push one
+    push i32 1
     leq
-    jumpif fib_base     // if n <= 1 return n
-
-    // fib(n-1)
+    jumpif fib_base
+    // recursive case
+    // compute fib(n-1)
     dup
     dec
-    call fib            // stack: n fib(n-1)
-
-    // fib(n-2)
+    call fib
+    // stack: n fib(n-1)
+    // compute fib(n-2)
+    // need to get n back to top
     swap
     push i32 2
     sub
-    call fib            // stack: fib(n-1) fib(n-2)
-
-    add                 // stack: fib(n)
+    call fib
+    // stack: fib(n-1) fib(n-2)
+    add
+    ret
+    label fib_base
+    // n <= 1, return n
     ret
 
-    label fib_base
-        ret             // stack: n (which is 0 or 1)
-
-proc loop in out def
-    label loop
-    jump loop
-    
+proc main in out def
+    // compute fib(10) = 55
+    push i32 10
+    call fib
+    // result is on stack, pop it
+    pop
+    ret          // stack: n (which is 0 or 1)

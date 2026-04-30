@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{statement::DType, util::FilePos};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TypeStackEntry {
     Unknown,
     Known(DType),
@@ -29,11 +29,17 @@ pub struct BasicBlock {
     // the constraints array is built during block-local analysis
     // each element represents a pair of types which must be equal when resolved
     // they are resolved according to the entry vector
-    pub constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)>
+    pub const_equal: Vec<(TypeStackEntry, TypeStackEntry, FilePos)>,
+    // the integer check array is also built like the constraint array, but it is for the special
+    // jumpif case
+    // all the entries in here must be integer types when resolved
+    pub const_int: Vec<(TypeStackEntry, FilePos)>,
+
+    pub pos: FilePos,
 }
 
 impl BasicBlock {
-    pub fn new(start: usize, length: usize) -> BasicBlock {
-        BasicBlock { start, length, predecessors: HashSet::new(), successors: HashSet::new(), entry_stack: vec![], exit_stack: vec![], constraints: vec![] }
+    pub fn new(start: usize, length: usize, pos: FilePos) -> BasicBlock {
+        BasicBlock { start, length, predecessors: HashSet::new(), successors: HashSet::new(), entry_stack: vec![], exit_stack: vec![], const_equal: vec![], const_int: vec![], pos }
     }
 }

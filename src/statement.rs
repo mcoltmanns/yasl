@@ -20,6 +20,11 @@ pub enum DType {
     F32,
     F64,
 }
+impl DType {
+    pub fn is_integer(&self) -> bool {
+        matches!(self, DType::I8 | DType::I16 | DType::I32 | DType::I64 | DType::U8 | DType::U16 | DType::U32 | DType::U64)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Literal {
@@ -117,18 +122,6 @@ impl Statement {
 
     pub fn pos(&self) -> &FilePos {
         &self.pos
-    }
-
-    // typing information methods
-    // these give type information that can be known at compile time
-    pub fn inputs(&self) -> Vec<Option<DType>> {
-        unimplemented!()
-    }
-    pub fn outputs(&self) -> Vec<Option<DType>> {
-        unimplemented!()
-    }
-    pub fn equals(&self) -> &[usize] {
-        unimplemented!()
     }
 }
 impl Display for Statement {

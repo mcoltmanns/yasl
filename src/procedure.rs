@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::usize;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use crate::basicblock::TypeStackEntry;
 use crate::statement::DType;
 use crate::statement::LiteralValue;
@@ -14,6 +15,7 @@ pub type SignatureTable = HashMap<String, (Vec<DType>, Vec<DType>)>;
 
 pub struct Procedure {
     name: String,
+    pos: FilePos,
     inputs: Vec<DType>,
     outputs: Vec<DType>,
     blocks: Vec<BasicBlock>,
@@ -23,8 +25,8 @@ pub struct Procedure {
 }
 
 impl Procedure {
-    pub fn new(name: String, inputs: Vec<DType>, outputs: Vec<DType>, statements: Vec<Statement>) -> Procedure {
-        Procedure { name, inputs, outputs, blocks: vec![], statements, jump_table: HashMap::new() }
+    pub fn new(name: String, pos: FilePos, inputs: Vec<DType>, outputs: Vec<DType>, statements: Vec<Statement>) -> Procedure {
+        Procedure { name, pos, inputs, outputs, blocks: vec![], statements, jump_table: HashMap::new() }
     }
 
     pub fn get_blocks(&self) -> &Vec<BasicBlock> {
@@ -66,6 +68,7 @@ impl Procedure {
         // each element represents a pair of types which must be equal when resolution is complete
         // as resolution progresses, these things can be resolved as the entry vector fills in
         let mut constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)> = vec![];
+        let mut int_constraints: Vec<(TypeStackEntry, FilePos)> = vec![];
 
         // pops from the tracking stack
         // if there was something there, returns that
@@ -115,6 +118,9 @@ impl Procedure {
                     tracking.push(b);
                 }
                 // two-arg operators
+                // they all require both inputs be the same, and return their input type
+                // for logic operators this means you might need to cast if you want your output to
+                // be useful for a jump
                 StatementKind::Add | StatementKind::Sub | StatementKind::Mult | StatementKind::Div | StatementKind::Mod | StatementKind::And | StatementKind::Or | StatementKind::Xor | StatementKind::Eq | StatementKind::Neq | StatementKind::Lt | StatementKind::Leq | StatementKind::Gt | StatementKind::Geq => {
                     let a = pop_from_tracking(&mut tracking, &mut entry);
                     let b = pop_from_tracking(&mut tracking, &mut entry);
@@ -159,7 +165,7 @@ impl Procedure {
                 StatementKind::Call { dest } => {
                     if let Some((inputs, outputs)) = sig_table.get(dest) {
                         // iterate in reverse because it's a stack
-                        // if we have proc foo in i32 f16 out def
+                        // if we have proc foo in i32 f16 out u8 u16 def
                         // we want the stack to look like (top) f16 i32
                         // because that allows the syntax to be
                         // push i32
@@ -170,22 +176,25 @@ impl Procedure {
                             let top = pop_from_tracking(&mut tracking, &mut entry);
                             constraints.push((top, TypeStackEntry::Known(input.clone()), s.pos().clone()));
                         }
-                        // same thing for outputs
+                        // for the outputs, going by the example above, we want the stack to look
+                        // like (top) u16 u8 because that allows the syntax within the procedure to
+                        // be push u8 push u16 which is consistent with the signature
+                        // that does mean that the stack will be 'backwards' for the caller - they
+                        // would do pop pop and get u16 u8
                         for output in outputs.iter().rev() {
                             tracking.push(TypeStackEntry::Known(output.clone()))
                         }
                     }
                     else {
                         logger.error(format!("cannot find signature for unknown procedure \"{}\"", dest), s.pos().line, s.pos().col);
+                        return;
                     }
                 }
                 // jumpif requires an integer
-                // we check jump destinations later
+                // we check jump destinations later (during block linkage)
                 StatementKind::Jumpif { .. } => {
                     let cond = pop_from_tracking(&mut tracking, &mut entry);
-                    // we don't have a specific integer type, so just push an i32 and handle this
-                    // during propagation later
-                    constraints.push((cond, TypeStackEntry::Known(DType::I32), s.pos().clone()));
+                    int_constraints.push((cond, s.pos().clone()));
                 }
                 // if we arrive at a return statement, we expect the output types of this procedure
                 // to be on the stack
@@ -201,7 +210,7 @@ impl Procedure {
                     // because this is the return, we also expect that the tracking stack is
                     // empty
                     if !tracking.is_empty() {
-                        logger.error(format!("procedure returns with {} extra value{} on stack", tracking.len(), if tracking.len() > 1 { 's' } else { '\0' }), s.pos().line, s.pos().col);
+                        logger.error(format!("procedure returns with {} extra value{} on stack", tracking.len(), if tracking.len() > 1 { "s" } else { "" }), s.pos().line, s.pos().col);
                     }
                 }
                 // none of the other things have an effect on the local data stack
@@ -211,12 +220,159 @@ impl Procedure {
 
         b.entry_stack = entry;
         b.exit_stack = tracking;
-        b.constraints = constraints;
+        b.const_equal = constraints;
+        b.const_int = int_constraints;
     }
 
     pub fn resolve_types(&mut self, logger: &mut dyn Logger) {
-        // resolving types in a procedure
-        //
+        // the first block is always the entry block
+        if self.blocks.is_empty() {
+            logger.error("undefined procedure".to_string(), self.pos.line, self.pos.col);
+            return;
+        }
+        let entry_block = &mut self.blocks[0];
+        if entry_block.entry_stack.len() != self.inputs.len() {
+            logger.error(format!("procedure consumes {} argument{}, but signature declares {}", entry_block.entry_stack.len(), if entry_block.entry_stack.len() == 1 { "s" } else { "" }, self.inputs.len()), self.pos.line, self.pos.col);
+            return;
+        }
+        // we need to reverse the iterator on our inputs here because:
+        // the entry block entry stack contains items in the order they are used
+        // but the inputs are listed 'backwards' (stack top at back) because of the convention we
+        // follow for signatures
+        for (slot, input) in entry_block.entry_stack.iter_mut().zip(self.inputs.iter().rev()) {
+            *slot = TypeStackEntry::Known(input.clone());
+        }
+
+        // now that the entry block's inputs are known and at least somewhat correct, we can add it
+        // to the worklist and propagate input types through the blocks in the procedure
+        // the worklist is also a convenient place to make sure we have a reachable return
+        // statement, since it is guaranteed to visit every block reachable from the entry
+        // point
+        let mut todo_ids: VecDeque<usize> = vec![0].into();
+        let mut visited: HashSet<usize> = HashSet::new();
+
+        while !todo_ids.is_empty() {
+            let current_id = todo_ids.pop_back().unwrap();
+            let current = &mut self.blocks[current_id];
+            visited.insert(current_id);
+
+            // if this block has no successors, it has to end in a return statement
+            // return statements are always at the ends of blocks by definition
+            if current.successors.is_empty() {
+                let last = &self.statements[current.start + current.length - 1];
+                if !matches!(last.kind(), StatementKind::Ret) {
+                    logger.error("procedure has no valid path to return".to_string(), current.pos.line, current.pos.col);
+                }
+            }
+
+            // first we resolve what outputs we can
+            let exit_stack: Vec<TypeStackEntry> = current.exit_stack.iter().map(
+                |output| -> TypeStackEntry {
+                    match output {
+                        TypeStackEntry::Depends(ev_i) => current.entry_stack[*ev_i].clone(),
+                        other => other.clone(),
+                    }
+                }
+            ).collect();
+
+            // then we can propagate the outputs to the successors
+            let successors: Vec<usize> = current.successors.iter().cloned().collect();
+            for succ_id in successors {
+                let succ = &mut self.blocks[succ_id];
+                let mut changed = false;
+                // if the successor has the wrong number of outputs, throw
+                // and go to the next one bc partial propagation doesn't help anyone
+                if succ.entry_stack.len() != exit_stack.len() {
+                    logger.error(format!("stack depth mismatch at block boundary (expected {}, got {})", succ.entry_stack.len(), exit_stack.len()), succ.pos.line, succ.pos.col);
+                    continue;
+                }
+                // propagate the resolved exit stack (incoming) for this block into the entry stack of the
+                // next block (slot)
+                for (slot, incoming) in succ.entry_stack.iter_mut().zip(exit_stack.iter()) {
+                    match incoming {
+                        // there should be no dependencies in the temporary exit stack, since they
+                        // were resolved
+                        TypeStackEntry::Depends(_) => panic!("unresolved dependencies in exit stack"),
+                        // unknowns should not be propagated
+                        TypeStackEntry::Unknown => {}
+                        // known values should be propagated
+                        TypeStackEntry::Known(_) => {
+                            // if the slot is unknown, then we propagate and remember there's more
+                            // work to do
+                            if *slot == TypeStackEntry::Unknown {
+                                *slot = incoming.clone();
+                                changed = true;
+                            }
+                            // but if the slot is known, and the types aren't right, it's an error
+                            else if slot != incoming {
+                                logger.error(format!("type mismatch ({:?} != {:?})", slot, incoming), succ.pos.line, succ.pos.col);
+                            }
+                        }
+                    }
+                }
+
+                // only visit successors if you changed something or haven't seen them yet, and if
+                // they're not already slated for reprocessing
+                if (changed || !visited.contains(&succ_id)) && !todo_ids.contains(&succ_id) {
+                    todo_ids.push_back(succ_id);
+                }
+            }
+        }
+
+        // now all the entry stacks are fully resolved
+        // we can check constraints and resolve exit stacks
+        for current in &mut self.blocks {
+            // first step is to check block constraints
+            // first do equality constraints
+            for (a, b, pos) in current.const_equal.iter() {
+                // first resolve the constraint if it is unresolved and its target is known
+                let resolved_a = match a {
+                    TypeStackEntry::Depends(i) => current.entry_stack[*i].clone(),
+                    other => other.clone()
+                };
+                let resolved_b = match b {
+                    TypeStackEntry::Depends(i) => current.entry_stack[*i].clone(),
+                    other => other.clone()
+                };
+                // now if the constraint is fully known, we can validate
+                if let TypeStackEntry::Known(conc_a) = resolved_a && let TypeStackEntry::Known(conc_b) = resolved_b {
+                    if conc_a != conc_b {
+                        logger.error(format!("type mismatch ({:?} != {:?})", conc_a, conc_b), pos.line, pos.col);
+                    }
+                }
+                // if the constraint isn't fully known at this point it's an error
+                else {
+                    logger.error("type resolution failed".to_string(), pos.line, pos.col);
+                }
+                // we don't really need to store resolved constraints
+            }
+            // then do integer constraints
+            for (a, pos) in current.const_int.iter() {
+                let resolved_a = match a {
+                    TypeStackEntry::Depends(i) => current.entry_stack[*i].clone(),
+                    other => other.clone()
+                };
+                match resolved_a {
+                    TypeStackEntry::Known(t) if t.is_integer() => {}
+                    TypeStackEntry::Known(t) => {
+                        logger.error(format!("conditional jumps can only operate on integer types, got {:?}", t), pos.line, pos.col);
+                    }
+                    _ => {
+                        logger.error("type resolution failed".to_string(), pos.line, pos.col);
+                    }
+                }
+            }
+
+            // then we can resolve the outputs from the inputs, and write them
+            current.exit_stack = current.exit_stack.iter().map(
+                |output| -> TypeStackEntry {
+                    match output {
+                        TypeStackEntry::Depends(ev_i) => current.entry_stack[*ev_i].clone(),
+                        other => other.clone(),
+                    }
+                }
+            ).collect();
+        }
     }
 
     pub fn build_jumps_and_blocks(&mut self, logger: &mut dyn Logger) {
@@ -238,7 +394,7 @@ impl Procedure {
                         self.blocks.push(last_block);
                     }
                     // and start a new one
-                    current_block = Some(BasicBlock::new(i, 0));
+                    current_block = Some(BasicBlock::new(i, 0, s.pos().clone()));
                     // also because this is a label, create an entry in the jump table
                     // if the entry existed, log an error
                     if self.jump_table.insert(name.clone(), self.blocks.len()).is_some() {
@@ -261,13 +417,13 @@ impl Procedure {
                     // if there was no previous block, create a block containing only this
                     // statement
                     else {
-                        self.blocks.push(BasicBlock::new(i, 1));
+                        self.blocks.push(BasicBlock::new(i, 1, s.pos().clone()));
                     }
                 }
                 _ => {
                     // anything else starts a new block if we aren't already working on one
                     if current_block.is_none() {
-                        current_block = Some(BasicBlock::new(i, 0));
+                        current_block = Some(BasicBlock::new(i, 0, s.pos().clone()));
                     }
                 }
             };
@@ -340,6 +496,16 @@ impl Procedure {
             self.blocks[from].successors.insert(to);
             self.blocks[to].predecessors.insert(from);
         }
+
+        // check for unreachable blocks
+        // the first block is always reachable, so skip it
+        for (b_id, b) in self.blocks.iter().enumerate().skip(1) {
+            // you are unreachable if you have no predecessors or if you are your only predecessor
+            if b.predecessors.is_empty() || (b.predecessors.len() == 1 && b.predecessors.contains(&b_id)){
+                let pos = self.statements[b.start].pos();
+                logger.warning("unreachable code".to_string(), pos.line, pos.col);
+            }
+        } 
     }
 }
 

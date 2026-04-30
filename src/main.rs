@@ -5,6 +5,7 @@ use yasl::tokenizer;
 use yasl::parser;
 use yasl::procedure;
 use yasl::statement;
+use std::env;
 use std::fs;
 
 fn main() {
@@ -12,7 +13,9 @@ fn main() {
 
     let mut logger = logger::StdoutLogger::new();
 
-    let src_path = std::path::Path::new("./test.yas");
+    let args: Vec<String> = env::args().collect();
+
+    let src_path = std::path::Path::new(&args[1]);
     let src_string = match fs::read_to_string(src_path) {
         Ok(s) => s,
         Err(err) => {
@@ -49,7 +52,7 @@ fn main() {
                 if procedure_table.contains_key(name) {
                     logger.error(format!("procedure \"{}\" defined twice", name), s.pos().line, s.pos().col);
                 }
-                current_proc = Some(Procedure::new(name.clone(), t_in.clone(), t_out.clone(), vec![]));
+                current_proc = Some(Procedure::new(name.clone(), s.pos().clone(), t_in.clone(), t_out.clone(), vec![]));
             }
             _ => {
                 match &current_proc {
@@ -57,7 +60,7 @@ fn main() {
                         current_statements.push(s.clone());
                     }
                     None => {
-                        logger.warning("statement outside of procedure is unreachable".to_string(), s.pos().line, s.pos().col);
+                        logger.warning("unreachable code".to_string(), s.pos().line, s.pos().col);
                     }
                 }
             }
@@ -88,10 +91,12 @@ fn main() {
         // procedure-local type resolution
         // because we have fixpoints for types in a procedure signature, all type
         // resolution can take place at the procedural level
+        // this also checks for non-returning procedures (ensures all reachable blocks without
+        // successors have a return statement)
         p.resolve_types(&mut logger);
     }
 
-    for p in procedure_table.values() {
+    /*for p in procedure_table.values() {
         println!("{} {:?} {:?}", p.name(), p.get_intypes(), p.get_outtypes());
         for s in p.get_statements() {
             println!("  {}", s);
@@ -100,11 +105,12 @@ fn main() {
             println!("  Basic block {} begins at statement {} and has length {}", i, b.start, b.length);
             println!("    Predecessors are: {:?}", b.predecessors);
             println!("    Successors are: {:?}", b.successors);
-            println!("    Unresolved inputs are: {:?}", b.entry_stack);
-            println!("    Unresolved outputs are: {:?}", b.exit_stack);
-            println!("    Constraints are: {:?}", b.constraints);
+            println!("    Resolved inputs are: {:?}", b.entry_stack);
+            println!("    Resolved outputs are: {:?}", b.exit_stack);
+            println!("    Equality constraints are: {:?}", b.const_equal);
+            println!("    Integer constraints are: {:?}", b.const_int);
         }
-    }
+    }*/
 
     // generally speaking we try to continue through and give as many errors as possible to
     // inform the developer
