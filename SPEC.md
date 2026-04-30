@@ -90,13 +90,14 @@ E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u
     - define a label to jump to. Labels must be globally unique.
 - proc <name> in <type1> ... <typeN> out <type1> ... <typeN>
     - define a procedure with guaranteed input and output types.
-    - procedures are define-before-use.
 - jump <name>
     - jump to a label. Jumps may be forward or backward, but cannot cross procedure boundaries.
 - jumpif <name>
     - conditional jump. Consumes top, and jumps if not 0.
     - jumpif can only operate on integer types (i or u)
 - call <name>
-    - push the current execution location to the call stack and jump to the label.
+    - call a procedure. Control is returned to the caller afterwards.
+    - when a procedure begins execution, its stack will contain only the types defined in its signature.
 - ret
-    - pop the call stack and return to that execution location.
+    - return from a procedure (to the caller).
+    - when ret is called, a procedure's data stack must contain only the types defined in its signature.
