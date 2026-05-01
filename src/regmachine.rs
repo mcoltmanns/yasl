@@ -111,7 +111,8 @@ impl RegProcedure {
         // block by block. this is probably not as optimization friendly as straight up ssa but
         // we're not after speed here.
         // array of instructions to emit
-        let mut instructions = vec![];
+        // TODO have to emit instructions by block!
+        let mut block_instructions: HashMap<usize, Vec<RegInstruction>> = HashMap::new();
         // allocating the registers is a little complicated
         // we can't just go through in source order and allocate, because there might be back edges
         // we also can't keep a procedure-level stack and allocate per block
@@ -122,16 +123,11 @@ impl RegProcedure {
         // in blocks that can be arrived at from multiple places (where the entry register stack is
         // already populated), we emit move instructions to reconcile the stacks
         // first we seed the register block map with the entry block's entry stack
-        block_entry_regs.insert(0, vec![]);
-        for arg in ir_proc.get_blocks()[0].entry_stack.iter().rev() {
-            if let TypeStackEntry::Known(dtype) = arg {
-                let nr = new_reg(dtype.clone());
-                block_entry_regs.get_mut(&0).unwrap().push(nr);
-            }
-            else {
-                panic!("unknown type after type resolution");
-            }
+        let mut proc_entry_regs: Vec<VReg> = vec![];
+        for arg in ir_proc.get_intypes().iter() {
+            proc_entry_regs.push(new_reg(arg.clone()));
         }
+        block_entry_regs.insert(0, proc_entry_regs);
         // we also set up the output registers
         // we need as many of these as we have procedure outputs in the signature
         // whenever a ret happens, we move outputs into these
@@ -150,10 +146,14 @@ impl RegProcedure {
                 continue;
             }
             let block = &ir_proc.get_blocks()[block_id];
+            // instructions vector for this block
+            let mut instructions = vec![];
+            // seed our register stack from the block entry map
             let mut stack_regs = block_entry_regs.get(&block_id).unwrap().clone();
             // sanity check, make sure the register stack on entry to this block looks like the
             // type stack we validated earlier
-            for (tse, reg) in block.entry_stack.iter().rev().zip(&stack_regs) {
+            println!("{} {:?} {:?}", block_id, block.entry_stack, stack_regs);
+            for (reg, tse) in stack_regs.iter().rev().zip(block.entry_stack.iter()) {
                 match (tse, reg) {
                     (TypeStackEntry::Known(tse_type), VReg { id: _, dtype } ) => {
                         if *tse_type != *dtype {
@@ -167,7 +167,8 @@ impl RegProcedure {
             }
             // allocate and drop registers as needed
             for s in &ir_proc.get_statements()[block.start..block.start + block.length] {
-                //println!("{}", s);
+                println!("{}", s);
+                println!("{:?}", stack_regs);
                 match s.kind() {
                     StatementKind::Push { value } => {
                         // allocate a new register, load it with the value, push it to the stack
@@ -223,7 +224,8 @@ impl RegProcedure {
                         // look up destination signature to know how many ins/outs
                         let dest_proc = ir_table.get(dest).unwrap();
                         // pop as many inputs as we need from the reg stack
-                        let call_in_regs: Vec<VReg> = dest_proc.get_intypes().iter().map(|_| stack_regs.pop().unwrap()).collect();
+                        let mut call_in_regs: Vec<VReg> = dest_proc.get_intypes().iter().map(|_| stack_regs.pop().unwrap()).collect();
+                        call_in_regs.reverse();
                         // allocate as many outputs as we need
                         let call_out_regs: Vec<VReg> = dest_proc.get_outtypes().iter().map(|dt| new_reg(dt.clone())).collect();
                         // emit that instruction
@@ -237,7 +239,7 @@ impl RegProcedure {
                         // pop as many registers off the stack as we need
                         let outs: Vec<VReg> = ir_proc.get_outtypes().iter().map(|_| stack_regs.pop().unwrap()).collect();
                         // move them into the return registers we allocated
-                        for (exit_reg, from) in proc_exit_regs.iter().zip(outs.iter()) {
+                        for (exit_reg, from) in proc_exit_regs.iter().rev().zip(outs.iter()) {
                             if exit_reg.dtype != from.dtype {
                                 panic!("type mismatch between allocated return registers and working registers at proc return")
                             }
@@ -411,7 +413,7 @@ impl RegProcedure {
             // now stack_regs contains this block's exit stack
             // do another sanity check, make sure it aligns with what we discovered in type
             // analysis
-            for (tse, reg) in block.exit_stack.iter().zip(&stack_regs) {
+            for (tse, reg) in block.exit_stack.iter().zip(stack_regs.iter().rev()) {
                 match (tse, reg) {
                     (TypeStackEntry::Known(tse_type), VReg { id: _, dtype } ) => {
                         if *tse_type != *dtype {
@@ -425,11 +427,11 @@ impl RegProcedure {
             }
             // then propagate this exit stack to the successors and queue them for visitation
             for succ_id in &block.successors {
-                // insert the exit stack if it's empty
+                // if there's no entry registers for that block, insert directly
                 block_entry_regs.entry(*succ_id).or_insert_with(|| stack_regs.clone());
 
-                // if there's already a stack here, reconcile with moves
-                if let Some(existing) = block_entry_regs.get(succ_id) && *existing != stack_regs {
+                // if there are already registers there, reconcile with moves
+                if let Some(existing) = block_entry_regs.get(succ_id) && *existing != *stack_regs {
                     for (existing_reg, current_reg) in existing.iter().zip(stack_regs.iter()) {
                         if existing_reg != current_reg {
                             instructions.push(RegInstruction::Mov(existing_reg.clone(), current_reg.clone()));
@@ -444,8 +446,16 @@ impl RegProcedure {
             for succ_id in &block.successors {
                 todo_ids.push_front(*succ_id);
             }
+
+            block_instructions.insert(block_id, instructions);
+        }
+        
+        // collect all the block instructions in source order
+        let mut collected_instructions: Vec<RegInstruction> = vec![];
+        for (b_i, _) in ir_proc.get_blocks().iter().enumerate() {
+            collected_instructions.append(block_instructions.get_mut(&b_i).unwrap());
         }
 
-        RegProcedure { name: ir_proc.name().clone(), inputs: block_entry_regs.get(&0).unwrap().clone(), outputs: proc_exit_regs, instructions }
+        RegProcedure { name: ir_proc.name().clone(), inputs: block_entry_regs.get(&0).unwrap().clone(), outputs: proc_exit_regs, instructions: collected_instructions }
     }
 }
