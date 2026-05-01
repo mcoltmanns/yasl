@@ -25,6 +25,24 @@ impl DType {
         matches!(self, DType::I8 | DType::I16 | DType::I32 | DType::I64 | DType::U8 | DType::U16 | DType::U32 | DType::U64)
     }
 }
+impl From<Literal> for DType {
+    fn from(value: Literal) -> Self {
+        match value.value() {
+            LiteralValue::Pointer(_) => DType::Pointer,
+            LiteralValue::I8(_) => DType::I8,
+            LiteralValue::I16(_) => DType::I16,
+            LiteralValue::I32(_) => DType::I32,
+            LiteralValue::I64(_) => DType::I64,
+            LiteralValue::U8(_) => DType::U8,
+            LiteralValue::U16(_) => DType::U16,
+            LiteralValue::U32(_) => DType::U32,
+            LiteralValue::U64(_) => DType::U64,
+            LiteralValue::F16(_) => DType::F16,
+            LiteralValue::F32(_) => DType::F32,
+            LiteralValue::F64(_) => DType::F64,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Literal {

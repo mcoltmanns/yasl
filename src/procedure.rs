@@ -22,11 +22,25 @@ pub struct Procedure {
     statements: Vec<Statement>,
     // local table for jump labels
     jump_table: HashMap<String, usize>,
+    calls: HashSet<String>,
+    called_by: HashSet<String>,
 }
 
 impl Procedure {
     pub fn new(name: String, pos: FilePos, inputs: Vec<DType>, outputs: Vec<DType>, statements: Vec<Statement>) -> Procedure {
-        Procedure { name, pos, inputs, outputs, blocks: vec![], statements, jump_table: HashMap::new() }
+        Procedure { name, pos, inputs, outputs, blocks: vec![], statements, jump_table: HashMap::new(), calls: HashSet::new(), called_by: HashSet::new() }
+    }
+
+    pub fn reachable(&self) -> bool {
+        // you are reachable if you are not unreachable
+        // and you are unreachable if your name is not main and your predecessor set contains only
+        // your name
+        let unreachable = self.name != "main" && self.called_by.get(&self.name).is_some_and(|_| self.called_by.len() <= 1);
+        !unreachable
+    }
+
+    pub fn pos(&self) -> &FilePos {
+        &self.pos
     }
 
     pub fn get_blocks(&self) -> &Vec<BasicBlock> {
@@ -77,6 +91,11 @@ impl Procedure {
         fn pop_from_tracking(tracking: &mut Vec<TypeStackEntry>, entry: &mut Vec<TypeStackEntry>) -> TypeStackEntry {
             tracking.pop().unwrap_or_else(|| -> TypeStackEntry {
                 let slot = entry.len();
+                // technically the order we push here is wrong
+                // because the last thing to call this wants a thing from the bottom of the entry
+                // stack, not the back
+                // but that would mean we need to update the constraint indices each time
+                // so just remember that this particular stack and the constraints are backwards
                 entry.push(TypeStackEntry::Unknown);
                 TypeStackEntry::Depends(slot)
             })
@@ -148,7 +167,8 @@ impl Procedure {
                     constraints.push((ptr, TypeStackEntry::Known(DType::Pointer), s.pos().clone()));
                     tracking.push(TypeStackEntry::Known(kind.clone()));
                 }
-                // store has 2 args: thing to store, and pointer to store it at
+                // store has 2 args: thing to store, and pointer to store it at (stack: dest val
+                // (top))
                 StatementKind::Store { kind } => {
                     let thing = pop_from_tracking(&mut tracking, &mut entry);
                     let ptr = pop_from_tracking(&mut tracking, &mut entry);
@@ -164,24 +184,15 @@ impl Procedure {
                 // call info can be looked up in procedure table
                 StatementKind::Call { dest } => {
                     if let Some((inputs, outputs)) = sig_table.get(dest) {
-                        // iterate in reverse because it's a stack
-                        // if we have proc foo in i32 f16 out u8 u16 def
-                        // we want the stack to look like (top) f16 i32
-                        // because that allows the syntax to be
-                        // push i32
-                        // push f16
-                        // call foo
-                        // first simulate the inputs
+                        // remember stack tops are the ends of vectors
+                        // so iterate backwards
                         for input in inputs.iter().rev() {
                             let top = pop_from_tracking(&mut tracking, &mut entry);
                             constraints.push((top, TypeStackEntry::Known(input.clone()), s.pos().clone()));
                         }
-                        // for the outputs, going by the example above, we want the stack to look
-                        // like (top) u16 u8 because that allows the syntax within the procedure to
-                        // be push u8 push u16 which is consistent with the signature
-                        // that does mean that the stack will be 'backwards' for the caller - they
-                        // would do pop pop and get u16 u8
-                        for output in outputs.iter().rev() {
+                        // again stack tops are the ends of vectors
+                        // but since we're pushing iterate forwards
+                        for output in outputs.iter() {
                             tracking.push(TypeStackEntry::Known(output.clone()))
                         }
                     }
@@ -203,6 +214,7 @@ impl Procedure {
                 StatementKind::Ret => {
                     // check that all of the types we want to return are available on the
                     // procedure stack
+                    // remember top of stack is at back
                     for output in self.outputs.iter().rev() {
                         let top = pop_from_tracking(&mut tracking, &mut entry);
                         constraints.push((top, TypeStackEntry::Known(output.clone()), s.pos().clone()));
@@ -235,10 +247,8 @@ impl Procedure {
             logger.error(format!("procedure consumes {} argument{}, but signature declares {}", entry_block.entry_stack.len(), if entry_block.entry_stack.len() == 1 { "s" } else { "" }, self.inputs.len()), self.pos.line, self.pos.col);
             return;
         }
-        // we need to reverse the iterator on our inputs here because:
-        // the entry block entry stack contains items in the order they are used
-        // but the inputs are listed 'backwards' (stack top at back) because of the convention we
-        // follow for signatures
+        // we have to iterate over one of these stacks backwards because entry_stack is backwards
+        // see definition of pop_from_tracking for explanation why
         for (slot, input) in entry_block.entry_stack.iter_mut().zip(self.inputs.iter().rev()) {
             *slot = TypeStackEntry::Known(input.clone());
         }

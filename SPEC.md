@@ -88,7 +88,7 @@ E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u
 ### Control flow
 - label <name>
     - define a label to jump to. Labels must be globally unique.
-- proc <name> in <type1> ... <typeN> out <type1> ... <typeN>
+- proc <name> in <type1> ... <typeN> out <type1> ... <typeN> def
     - define a procedure with guaranteed input and output types.
 - jump <name>
     - jump to a label. Jumps may be forward or backward, but cannot cross procedure boundaries.

@@ -1,6 +1,7 @@
 use yasl::logger;
 use yasl::logger::Logger;
 use yasl::procedure::Procedure;
+use yasl::regmachine::convert_proc_table;
 use yasl::tokenizer;
 use yasl::parser;
 use yasl::procedure;
@@ -121,6 +122,23 @@ fn main() {
         return
     }
 
-    // emit code
-    unimplemented!()
+    // so now we know the program is correct (at least as correct as we can know it to be)
+    // it's time to think about code generation
+    // the general pipeline is:
+    // source -> typed ir -> virtual register ir --(register allocation)-> real register ir
+    // --(instruction selection)-> assembly
+    
+    // lowering to virtual register IR
+    // each place on the stack becomes a virtual register name
+    // i mean each!
+    // you have infinite virtual registers
+    let reg_proc_table = convert_proc_table(&procedure_table, &mut logger);
+    for rp in reg_proc_table.values() {
+        println!("{}", rp.name);
+        println!("input registers: {:?}", rp.inputs);
+        println!("output registers: {:?}", rp.outputs);
+        for i in &rp.instructions {
+            println!("  {:?}", i);
+        }
+    }
 }

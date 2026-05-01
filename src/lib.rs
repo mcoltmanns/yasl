@@ -3,6 +3,7 @@ pub mod parser;
 pub mod statement;
 pub mod procedure;
 pub mod basicblock;
+pub mod regmachine;
 
 pub mod logger {
     pub enum EventKind {
@@ -33,9 +34,9 @@ pub mod logger {
             self.log(LogEvent { kind: EventKind::Info, msg, line: 0, col: 0 });
         }
 
-        fn has_error(self) -> bool;
+        fn has_error(&self) -> bool;
 
-        fn has_warning(self) -> bool;
+        fn has_warning(&self) -> bool;
     }
 
     pub struct StdoutLogger {
@@ -67,11 +68,11 @@ pub mod logger {
             }
         }
 
-        fn has_error(self) -> bool {
+        fn has_error(&self) -> bool {
             self.errored
         }
 
-        fn has_warning(self) -> bool {
+        fn has_warning(&self) -> bool {
             self.warned
         }
     }
@@ -89,11 +90,11 @@ pub mod logger {
             }
         }
 
-        fn has_error(self) -> bool {
+        fn has_error(&self) -> bool {
             self.errors.len() > 0
         }
 
-        fn has_warning(self) -> bool {
+        fn has_warning(&self) -> bool {
             self.warnings.len() > 0
         }
     }
