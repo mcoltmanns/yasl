@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::thread::current;
 use crate::basicblock::TypeStackEntry;
 use crate::statement::DType;
 use crate::statement::LiteralValue;
@@ -71,18 +72,21 @@ impl Procedure {
         &self.statements
     }
 
-    pub fn simulate_block_types(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
+    pub fn precompute_block(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
         // this simulates types on the procedure stack for this block
-        // cannot fully resolve, that is done during propagation
+        // figure out what we need at least on the stack when we arrive at this block, and what we
+        // will leave, and how type relations flow through the block
         let b = &mut self.blocks[b_i];
         let statements = &self.statements[b.start..b.start+b.length];
-        let mut tracking: Vec<TypeStackEntry> = vec![];
+        // entry vector to populate
         let mut entry: Vec<TypeStackEntry> = vec![];
         // the constraints array
         // each element represents a pair of types which must be equal when resolution is complete
         // as resolution progresses, these things can be resolved as the entry vector fills in
         let mut constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)> = vec![];
         let mut int_constraints: Vec<(TypeStackEntry, FilePos)> = vec![];
+        // tracking the stack within this block
+        let mut tracking: Vec<TypeStackEntry> = vec![];
 
         // pops from the tracking stack
         // if there was something there, returns that
@@ -101,6 +105,8 @@ impl Procedure {
             })
         }
 
+        // simulate the tracking stack through the statements, allocate more space on the entry
+        // stack if necessary
         for s in statements {
             match s.kind() {
                 // pushes only add to the type stack
@@ -237,29 +243,16 @@ impl Procedure {
     }
 
     pub fn resolve_types(&mut self, logger: &mut dyn Logger) {
-        // the first block is always the entry block
+        // resolve types throughout the procedure
+        // applies blocks as transformations
         if self.blocks.is_empty() {
             logger.error("undefined procedure".to_string(), self.pos.line, self.pos.col);
             return;
         }
-        let entry_block = &mut self.blocks[0];
-        if entry_block.entry_stack.len() != self.inputs.len() {
-            logger.error(format!("procedure consumes {} argument{}, but signature declares {}", entry_block.entry_stack.len(), if entry_block.entry_stack.len() == 1 { "s" } else { "" }, self.inputs.len()), self.pos.line, self.pos.col);
-            return;
-        }
-        // we have to iterate over one of these stacks backwards because entry_stack is backwards
-        // see definition of pop_from_tracking for explanation why
-        for (slot, input) in entry_block.entry_stack.iter_mut().zip(self.inputs.iter().rev()) {
-            *slot = TypeStackEntry::Known(input.clone());
-        }
-
-        // now that the entry block's inputs are known and at least somewhat correct, we can add it
-        // to the worklist and propagate input types through the blocks in the procedure
-        // the worklist is also a convenient place to make sure we have a reachable return
-        // statement, since it is guaranteed to visit every block reachable from the entry
-        // point
         let mut todo_ids: VecDeque<usize> = vec![0].into();
         let mut visited: HashSet<usize> = HashSet::new();
+        // master tracking stack, preload with the types that the procedure signature guarantees
+        let mut stack: Vec<TypeStackEntry> = self.inputs.iter().map(|t| TypeStackEntry::Known(t.clone())).collect();
 
         while !todo_ids.is_empty() {
             let current_id = todo_ids.pop_back().unwrap();
@@ -274,57 +267,52 @@ impl Procedure {
                     logger.error("procedure has no valid path to return".to_string(), current.pos.line, current.pos.col);
                 }
             }
+            println!("{}{} stack is {:?}", self.name, current_id, stack);
 
-            // first we resolve what outputs we can
-            let exit_stack: Vec<TypeStackEntry> = current.exit_stack.iter().map(
-                |output| -> TypeStackEntry {
-                    match output {
-                        TypeStackEntry::Depends(ev_i) => current.entry_stack[*ev_i].clone(),
-                        other => other.clone(),
+            // check the head of the stack against the expected stack size
+            if stack.len() < current.entry_stack.len() {
+                logger.error("stack underflow in procedure".to_string(), current.pos.line, current.pos.col);
+                continue;
+            }
+            // propagate/compare what we have through the procedure's input
+            for (expect, have) in current.entry_stack.iter_mut().zip(stack.iter().rev()) {
+                match expect {
+                    // if we don't know what we're getting, read it off the stack
+                    TypeStackEntry::Unknown => {
+                        *expect = have.clone();
                     }
-                }
-            ).collect();
-
-            // then we can propagate the outputs to the successors
-            let successors: Vec<usize> = current.successors.iter().cloned().collect();
-            for succ_id in successors {
-                let succ = &mut self.blocks[succ_id];
-                let mut changed = false;
-                // if the successor has the wrong number of outputs, throw
-                // and go to the next one bc partial propagation doesn't help anyone
-                if succ.entry_stack.len() != exit_stack.len() {
-                    logger.error(format!("stack depth mismatch at block boundary (expected {}, got {})", succ.entry_stack.len(), exit_stack.len()), succ.pos.line, succ.pos.col);
-                    continue;
-                }
-                // propagate the resolved exit stack (incoming) for this block into the entry stack of the
-                // next block (slot)
-                for (slot, incoming) in succ.entry_stack.iter_mut().zip(exit_stack.iter()) {
-                    match incoming {
-                        // there should be no dependencies in the temporary exit stack, since they
-                        // were resolved
-                        TypeStackEntry::Depends(_) => panic!("unresolved dependencies in exit stack"),
-                        // unknowns should not be propagated
-                        TypeStackEntry::Unknown => {}
-                        // known values should be propagated
-                        TypeStackEntry::Known(_) => {
-                            // if the slot is unknown, then we propagate and remember there's more
-                            // work to do
-                            if *slot == TypeStackEntry::Unknown {
-                                *slot = incoming.clone();
-                                changed = true;
-                            }
-                            // but if the slot is known, and the types aren't right, it's an error
-                            else if slot != incoming {
-                                logger.error(format!("type mismatch ({:?} != {:?})", slot, incoming), succ.pos.line, succ.pos.col);
-                            }
+                    // if we know what we're getting, check it against the stack
+                    TypeStackEntry::Known(_) => {
+                        if expect != have {
+                            logger.error(format!("type mismatch ({:?} != {:?})", expect, have), current.pos.line, current.pos.col);
                         }
                     }
+                    _ => {
+                        panic!("type dependency in block entry vector")
+                    }
                 }
-
-                // only visit successors if you changed something or haven't seen them yet, and if
+            }
+            // then propagate on to the output through the dependencies
+            for exit in current.exit_stack.iter_mut() {
+                if let TypeStackEntry::Depends(enter_i) = exit {
+                    *exit = current.entry_stack[*enter_i].clone();
+                }
+            }
+            println!("expect {:?}", current.entry_stack.clone().reverse());
+            println!("leave {:?}", current.exit_stack);
+            // now our block is basically a transformation: it takes the top of the stack as
+            // outlined in current.entry_stack and transforms it into whatever's in
+            // current.exit_stack. so transform the stack accordingly
+            stack.drain(stack.len() - current.entry_stack.len()..);
+            stack.append(&mut current.exit_stack.clone());
+            println!("{}{} stack after is {:?}", self.name, current_id, stack);
+            
+            // then we can propagate the outputs to the successors
+            for succ_id in current.successors.iter() {
+                // only visit successors if you haven't visited them yet, and
                 // they're not already slated for reprocessing
-                if (changed || !visited.contains(&succ_id)) && !todo_ids.contains(&succ_id) {
-                    todo_ids.push_back(succ_id);
+                if (!visited.contains(succ_id)) && !todo_ids.contains(succ_id) {
+                    todo_ids.push_back(*succ_id);
                 }
             }
         }
@@ -368,20 +356,10 @@ impl Procedure {
                         logger.error(format!("conditional jumps can only operate on integer types, got {:?}", t), pos.line, pos.col);
                     }
                     _ => {
-                        logger.error("type resolution failed".to_string(), pos.line, pos.col);
+                        logger.error("type resolution failed_".to_string(), pos.line, pos.col);
                     }
                 }
             }
-
-            // then we can resolve the outputs from the inputs, and write them
-            current.exit_stack = current.exit_stack.iter().map(
-                |output| -> TypeStackEntry {
-                    match output {
-                        TypeStackEntry::Depends(ev_i) => current.entry_stack[*ev_i].clone(),
-                        other => other.clone(),
-                    }
-                }
-            ).collect();
         }
     }
 
