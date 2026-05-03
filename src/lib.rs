@@ -1,9 +1,10 @@
 pub mod tokenizer;
-pub mod parser;
-pub mod statement;
-pub mod procedure;
-pub mod basicblock;
+//pub mod parser;
+//pub mod statement;
+//pub mod procedure;
+//pub mod basicblock;
 //pub mod regmachine;
+pub mod datastructures;
 
 pub mod logger {
     pub enum EventKind {
@@ -109,17 +110,20 @@ pub mod util {
         pub line: usize,
         pub col: usize
     }
+    impl FilePos {
+        pub fn new(name: &str, line: usize, col: usize) -> Self {
+            FilePos { _name: name.to_string(), line, col }
+        }
+    }
     impl Display for FilePos {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{} {}", self.line, self.col)
         }
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct Positioned<T> {
-        pub content: T,
-        pub pos: FilePos
+    pub trait Positionable {
+        fn pos(&self) -> &FilePos;
+        fn line(&self) -> usize;
+        fn col(&self) -> usize;
     }
-    // don't impl display! we want users to implement own display traits because this prints super
-    // ugly
 }
