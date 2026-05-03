@@ -15,31 +15,31 @@ proc test in i32 i8 ptr out i32 i8 def
     // i32 i8
     ret
 
-//proc fib in i32 out i32 def
-//    // stack: n
-//    // base case: n <= 1, return n
-//    dup
-//    push i32 1
-//    leq
-//    jumpif fib_base
-//    // recursive case
-//    // compute fib(n-1)
-//    dup
-//    dec
-//    call fib
-//    // stack: n fib(n-1)
-//    // compute fib(n-2)
-//    // need to get n back to top
-//    swap
-//    push i32 2
-//    sub
-//    call fib
-//    // stack: fib(n-1) fib(n-2)
-//    add
-//    ret
-//    label fib_base
-//    // n <= 1, return n
-//    ret
+proc fib in i32 out i32 def
+    // stack: n
+    // base case: n <= 1, return n
+    dup
+    push i32 1
+    leq
+    jumpif fib_base
+    // recursive case
+    // compute fib(n-1)
+    dup
+    dec
+    call fib
+    // stack: n fib(n-1)
+    // compute fib(n-2)
+    // need to get n back to top
+    swap
+    push i32 2
+    sub
+    call fib
+    // stack: fib(n-1) fib(n-2)
+    add
+    ret
+    label fib_base
+    // n <= 1, return n
+    ret
 
 proc main in out def
     // compute fib(10) = 55
@@ -49,8 +49,8 @@ proc main in out def
     call test
     pop
     pop
-    //push i32 10
-    //call fib
-    //// result is on stack, pop it
-    //pop
+    push i32 10
+    call fib
+    // result is on stack, pop it
+    pop
     ret          // stack: n (which is 0 or 1)

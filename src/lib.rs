@@ -3,7 +3,7 @@ pub mod parser;
 pub mod statement;
 pub mod procedure;
 pub mod basicblock;
-pub mod regmachine;
+//pub mod regmachine;
 
 pub mod logger {
     pub enum EventKind {
@@ -91,11 +91,11 @@ pub mod logger {
         }
 
         fn has_error(&self) -> bool {
-            self.errors.len() > 0
+            !self.errors.is_empty()
         }
 
         fn has_warning(&self) -> bool {
-            self.warnings.len() > 0
+            !self.warnings.is_empty()
         }
     }
 }

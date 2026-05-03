@@ -1,7 +1,7 @@
 use yasl::logger;
 use yasl::logger::Logger;
 use yasl::procedure::Procedure;
-use yasl::regmachine::convert_proc_table;
+//use yasl::regmachine::convert_proc_table;
 use yasl::tokenizer;
 use yasl::parser;
 use yasl::procedure;
@@ -87,7 +87,7 @@ fn main() {
         p.link_blocks(&mut logger);
         // block-local type analysis
         for i in 0..p.get_blocks().len() {
-            p.simulate_block_types(i, &signature_table, &mut logger);
+            p.compute_block_pushes_and_pops(i, &signature_table, &mut logger);
         }
         // procedure-local type resolution
         // because we have fixpoints for types in a procedure signature, all type
@@ -97,7 +97,7 @@ fn main() {
         p.resolve_types(&mut logger);
     }
 
-    /*for p in procedure_table.values() {
+    for p in procedure_table.values() {
         println!("{} {:?} {:?}", p.name(), p.get_intypes(), p.get_outtypes());
         for s in p.get_statements() {
             println!("  {}", s);
@@ -106,12 +106,10 @@ fn main() {
             println!("  Basic block {} begins at statement {} and has length {}", i, b.start, b.length);
             println!("    Predecessors are: {:?}", b.predecessors);
             println!("    Successors are: {:?}", b.successors);
-            println!("    Resolved inputs are: {:?}", b.entry_stack);
-            println!("    Resolved outputs are: {:?}", b.exit_stack);
-            println!("    Equality constraints are: {:?}", b.const_equal);
-            println!("    Integer constraints are: {:?}", b.const_int);
+            println!("    Requires: {:?}", b.pops);
+            println!("    Leaves: {:?}", b.pushes);
         }
-    }*/
+    }
 
     // generally speaking we try to continue through and give as many errors as possible to
     // inform the developer
@@ -132,7 +130,7 @@ fn main() {
     // each place on the stack becomes a virtual register name
     // i mean each!
     // you have infinite virtual registers
-    let reg_proc_table = convert_proc_table(&procedure_table, &mut logger);
+    /*let reg_proc_table = convert_proc_table(&procedure_table, &mut logger);
     for rp in reg_proc_table.values() {
         println!("{}", rp.name);
         println!("input registers: {:?}", rp.inputs);
@@ -140,5 +138,5 @@ fn main() {
         for i in &rp.instructions {
             println!("  {:?}", i);
         }
-    }
+    }*/
 }

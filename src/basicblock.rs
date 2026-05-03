@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashSet};
 
 use crate::{statement::DType, util::FilePos};
 
@@ -20,26 +20,21 @@ pub struct BasicBlock {
     // ditto for successors
     pub successors: HashSet<usize>,
 
-    // typing information
-    // a block needs certain types on the stack at entry in order to function
-    // and will leave certain types at exit
-    // these are the entry and exit type vectors
-    pub entry_stack: Vec<TypeStackEntry>,
-    pub exit_stack: Vec<TypeStackEntry>,
-    // the constraints array is built during block-local analysis
-    // each element represents a pair of types which must be equal when resolved
-    // they are resolved according to the entry vector
-    pub const_equal: Vec<(TypeStackEntry, TypeStackEntry, FilePos)>,
-    // the integer check array is also built like the constraint array, but it is for the special
-    // jumpif case
-    // all the entries in here must be integer types when resolved
-    pub const_int: Vec<(TypeStackEntry, FilePos)>,
+    // at the end of the day, blocks are just transformations over a stack of types
+    // blocks pop a certain number of types to the stack, and push a certain number of types to the
+    // stack. what exactly is popped doesn't matter, because we can pop inside the block and check
+    // types at the operation locations. what is pushed matters, because that information will be
+    // propagated to subsequent blocks
+    pub pops: usize,
+    pub pushes: Vec<TypeStackEntry>,
+
+    // operation constraints are resolved during a type checking pass
 
     pub pos: FilePos,
 }
 
 impl BasicBlock {
     pub fn new(start: usize, length: usize, pos: FilePos) -> BasicBlock {
-        BasicBlock { start, length, predecessors: HashSet::new(), successors: HashSet::new(), entry_stack: vec![], exit_stack: vec![], const_equal: vec![], const_int: vec![], pos }
+        BasicBlock { start, length, predecessors: HashSet::new(), successors: HashSet::new(), pops: 0, pushes: vec![], pos }
     }
 }

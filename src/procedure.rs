@@ -72,42 +72,30 @@ impl Procedure {
         &self.statements
     }
 
-    pub fn precompute_block(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
-        // this simulates types on the procedure stack for this block
+    pub fn compute_block_pushes_and_pops(&mut self, b_i: usize, sig_table: &SignatureTable, logger: &mut dyn Logger) {
+        // this simulates types on the procedure stack for a given block (by index)
         // figure out what we need at least on the stack when we arrive at this block, and what we
-        // will leave, and how type relations flow through the block
+        // will leave, and how type relations flow through the block (how outs depend on ins)
         let b = &mut self.blocks[b_i];
         let statements = &self.statements[b.start..b.start+b.length];
-        // entry vector to populate
-        let mut entry: Vec<TypeStackEntry> = vec![];
-        // the constraints array
-        // each element represents a pair of types which must be equal when resolution is complete
-        // as resolution progresses, these things can be resolved as the entry vector fills in
-        let mut constraints: Vec<(TypeStackEntry, TypeStackEntry, FilePos)> = vec![];
-        let mut int_constraints: Vec<(TypeStackEntry, FilePos)> = vec![];
         // tracking the stack within this block
         let mut tracking: Vec<TypeStackEntry> = vec![];
 
         // pops from the tracking stack
         // if there was something there, returns that
-        // if there wasn't, allocate an empty entry slot and return a dependency entry that refers to
-        // the newly allocated entry slot
-        fn pop_from_tracking(tracking: &mut Vec<TypeStackEntry>, entry: &mut Vec<TypeStackEntry>) -> TypeStackEntry {
+        // if there wasn't, increment our required pops and return an entry that depends on that pop
+        // position
+        fn pop(tracking: &mut Vec<TypeStackEntry>, pops: &mut usize) -> TypeStackEntry {
             tracking.pop().unwrap_or_else(|| -> TypeStackEntry {
-                let slot = entry.len();
-                // technically the order we push here is wrong
-                // because the last thing to call this wants a thing from the bottom of the entry
-                // stack, not the back
-                // but that would mean we need to update the constraint indices each time
-                // so just remember that this particular stack and the constraints are backwards
-                entry.push(TypeStackEntry::Unknown);
-                TypeStackEntry::Depends(slot)
+                *pops += 1;
+                TypeStackEntry::Depends(*pops - 1)
             })
         }
 
         // simulate the tracking stack through the statements, allocate more space on the entry
         // stack if necessary
         for s in statements {
+            println!("{:?}", tracking);
             match s.kind() {
                 // pushes only add to the type stack
                 StatementKind::Push { value } => {
@@ -128,76 +116,68 @@ impl Procedure {
                 }
                 // pops only discard, so no need to push the result of pop from tracking here
                 StatementKind::Pop => {
-                    pop_from_tracking(&mut tracking, &mut entry);
+                    pop(&mut tracking, &mut b.pops);
                 }
                 // dup just duplicates the type at the top of the stack
                 StatementKind::Dup => {
-                    let top = pop_from_tracking(&mut tracking, &mut entry);
+                    let top = pop(&mut tracking, &mut b.pops);
                     tracking.push(top.clone());
                     tracking.push(top);
                 }
                 StatementKind::Swap => {
-                    let a = pop_from_tracking(&mut tracking, &mut entry);
-                    let b = pop_from_tracking(&mut tracking, &mut entry);
-                    tracking.push(a);
-                    tracking.push(b);
+                    let a = pop(&mut tracking, &mut b.pops);
+                    let b = pop(&mut tracking, &mut b.pops);
+                    tracking.push(a.clone());
+                    tracking.push(b.clone());
                 }
                 // two-arg operators
                 // they all require both inputs be the same, and return their input type
                 // for logic operators this means you might need to cast if you want your output to
                 // be useful for a jump
                 StatementKind::Add | StatementKind::Sub | StatementKind::Mult | StatementKind::Div | StatementKind::Mod | StatementKind::And | StatementKind::Or | StatementKind::Xor | StatementKind::Eq | StatementKind::Neq | StatementKind::Lt | StatementKind::Leq | StatementKind::Gt | StatementKind::Geq => {
-                    let a = pop_from_tracking(&mut tracking, &mut entry);
-                    let b = pop_from_tracking(&mut tracking, &mut entry);
-                    // add to the constraint array
-                    constraints.push((a.clone(), b.clone(), s.pos().clone()));
+                    let a = pop(&mut tracking, &mut b.pops);
+                    let b = pop(&mut tracking, &mut b.pops);
                     // try to resolve the output type
                     // if a or b are known, use that
                     // otherwise depend on whatever the first arg depended on
                     let result = match (&a, &b) {
                         (TypeStackEntry::Known(t), _) => TypeStackEntry::Known(t.clone()),
                         (_, TypeStackEntry::Known(t)) => TypeStackEntry::Known(t.clone()),
-                        _ => a,
+                        _ => a.clone(),
                     };
                     tracking.push(result);
                 }
                 // increment and decrement just require anything and return that thing
                 StatementKind::Inc | StatementKind::Dec | StatementKind::Bsl | StatementKind::Bsr | StatementKind::Rol | StatementKind::Ror | StatementKind::Not => {
-                    let a = pop_from_tracking(&mut tracking, &mut entry);
+                    let a = pop(&mut tracking, &mut b.pops);
                     tracking.push(a.clone());
                 }
                 // load requires a pointer and leaves its kind
                 StatementKind::Load { kind } => {
                     // the pointer must be a pointer
-                    let ptr = pop_from_tracking(&mut tracking, &mut entry);
-                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer), s.pos().clone()));
+                    pop(&mut tracking, &mut b.pops);
                     tracking.push(TypeStackEntry::Known(kind.clone()));
                 }
                 // store has 2 args: thing to store, and pointer to store it at (stack: dest val
                 // (top))
-                StatementKind::Store { kind } => {
-                    let thing = pop_from_tracking(&mut tracking, &mut entry);
-                    let ptr = pop_from_tracking(&mut tracking, &mut entry);
-                    // thing must be kind, and ptr must be a pointer
-                    constraints.push((thing, TypeStackEntry::Known(kind.clone()), s.pos().clone()));
-                    constraints.push((ptr, TypeStackEntry::Known(DType::Pointer), s.pos().clone()));
+                StatementKind::Store { .. } => {
+                    pop(&mut tracking, &mut b.pops);
+                    pop(&mut tracking, &mut b.pops);
                 }
                 // cast and conv require one thing and leave the thing they cast or convert to
                 StatementKind::Cast { to } | StatementKind::Conv { to } => {
-                    pop_from_tracking(&mut tracking, &mut entry);
+                    pop(&mut tracking, &mut b.pops);
                     tracking.push(TypeStackEntry::Known(to.clone()));
                 }
                 // call info can be looked up in procedure table
                 StatementKind::Call { dest } => {
                     if let Some((inputs, outputs)) = sig_table.get(dest) {
                         // remember stack tops are the ends of vectors
-                        // so iterate backwards
-                        for input in inputs.iter().rev() {
-                            let top = pop_from_tracking(&mut tracking, &mut entry);
-                            constraints.push((top, TypeStackEntry::Known(input.clone()), s.pos().clone()));
+                        // but here it fully does not matter what direction you iterate
+                        for _ in inputs.iter() {
+                            pop(&mut tracking, &mut b.pops);
                         }
                         // again stack tops are the ends of vectors
-                        // but since we're pushing iterate forwards
                         for output in outputs.iter() {
                             tracking.push(TypeStackEntry::Known(output.clone()))
                         }
@@ -210,25 +190,18 @@ impl Procedure {
                 // jumpif requires an integer
                 // we check jump destinations later (during block linkage)
                 StatementKind::Jumpif { .. } => {
-                    let cond = pop_from_tracking(&mut tracking, &mut entry);
-                    int_constraints.push((cond, s.pos().clone()));
+                    pop(&mut tracking, &mut b.pops);
                 }
                 // if we arrive at a return statement, we expect the output types of this procedure
                 // to be on the stack
                 // doing it this way has the consequence that blocks which end in rec always have
-                // no output
+                // no output (but that's ok because nothing comes after them)
                 StatementKind::Ret => {
                     // check that all of the types we want to return are available on the
                     // procedure stack
-                    // remember top of stack is at back
-                    for output in self.outputs.iter().rev() {
-                        let top = pop_from_tracking(&mut tracking, &mut entry);
-                        constraints.push((top, TypeStackEntry::Known(output.clone()), s.pos().clone()));
-                    }
-                    // because this is the return, we also expect that the tracking stack is
-                    // empty
-                    if !tracking.is_empty() {
-                        logger.error(format!("procedure returns with {} extra value{} on stack", tracking.len(), if tracking.len() > 1 { "s" } else { "" }), s.pos().line, s.pos().col);
+                    // remember top of stack is at back (but again no matter)
+                    for _output in self.outputs.iter() {
+                        pop(&mut tracking, &mut b.pops);
                     }
                 }
                 // none of the other things have an effect on the local data stack
@@ -236,23 +209,28 @@ impl Procedure {
             };
         }
 
-        b.entry_stack = entry;
-        b.exit_stack = tracking;
-        b.const_equal = constraints;
-        b.const_int = int_constraints;
+        b.pushes = tracking;
     }
 
     pub fn resolve_types(&mut self, logger: &mut dyn Logger) {
         // resolve types throughout the procedure
         // applies blocks as transformations
+        // right now we know how many things the blocks take from the global stack, and what they
+        // push to the global stack (sometime what they push depends on what they see on the input)
+        // here you need to simulate the global stack and go through, propagate
+        // also here you need to check types within the blocks at each statement (or do that in a
+        // later procedure, once you know all the types)
+        // you will need to track full entry stacks, there's no way around it
         if self.blocks.is_empty() {
             logger.error("undefined procedure".to_string(), self.pos.line, self.pos.col);
             return;
         }
         let mut todo_ids: VecDeque<usize> = vec![0].into();
         let mut visited: HashSet<usize> = HashSet::new();
-        // master tracking stack, preload with the types that the procedure signature guarantees
-        let mut stack: Vec<TypeStackEntry> = self.inputs.iter().map(|t| TypeStackEntry::Known(t.clone())).collect();
+
+        // entry stack map, preload 0th block with procedure inputs
+        let mut entry_stacks: HashMap<usize, Vec<TypeStackEntry>> = HashMap::new();
+        entry_stacks.insert(0, self.inputs.iter().map(|t| TypeStackEntry::Known(t.clone())).collect());
 
         while !todo_ids.is_empty() {
             let current_id = todo_ids.pop_back().unwrap();
@@ -267,59 +245,71 @@ impl Procedure {
                     logger.error("procedure has no valid path to return".to_string(), current.pos.line, current.pos.col);
                 }
             }
-            println!("{}{} stack is {:?}", self.name, current_id, stack);
+
+            // get your entry stack
+            // unwrap is safe because we can only visit a block if its entry stack has been
+            // populated
+            let entry_stack = entry_stacks.get(&current_id).unwrap();
+
+            println!("{}{} stack is {:?}", self.name, current_id, entry_stack);
 
             // check the head of the stack against the expected stack size
-            if stack.len() < current.entry_stack.len() {
+            if entry_stack.len() < current.pops {
                 logger.error("stack underflow in procedure".to_string(), current.pos.line, current.pos.col);
                 continue;
             }
-            // propagate/compare what we have through the procedure's input
-            for (expect, have) in current.entry_stack.iter_mut().zip(stack.iter().rev()) {
-                match expect {
-                    // if we don't know what we're getting, read it off the stack
+            // compute the exit stack
+            // remember young is right
+            // so the exit stack before pushes is the entry stack without the last <pops> elements
+            let mut exit_stack: Vec<TypeStackEntry> = entry_stack[..entry_stack.len() - current.pops].to_vec();
+            for push in current.pushes.iter() {
+                match push {
+                    TypeStackEntry::Known(_) => exit_stack.push(push.clone()),
                     TypeStackEntry::Unknown => {
-                        *expect = have.clone();
+                        logger.error("unable to resolve type".to_string(), current.pos.line, current.pos.col);
                     }
-                    // if we know what we're getting, check it against the stack
-                    TypeStackEntry::Known(_) => {
-                        if expect != have {
-                            logger.error(format!("type mismatch ({:?} != {:?})", expect, have), current.pos.line, current.pos.col);
+                    TypeStackEntry::Depends(i) => {
+                        // in this case we depend on a value in the entry
+                        // the popped region(region we use) of the entry is entry[entry.len() - pops..]
+                        // i indexes into the popped region
+                        if let Some(t) = entry_stack.get(entry_stack.len() - current.pops + i) {
+                            exit_stack.push(t.clone());
+                        }
+                        else {
+                            panic!("invalid type dependency index");
                         }
                     }
-                    _ => {
-                        panic!("type dependency in block entry vector")
-                    }
                 }
             }
-            // then propagate on to the output through the dependencies
-            for exit in current.exit_stack.iter_mut() {
-                if let TypeStackEntry::Depends(enter_i) = exit {
-                    *exit = current.entry_stack[*enter_i].clone();
-                }
-            }
-            println!("expect {:?}", current.entry_stack.clone().reverse());
-            println!("leave {:?}", current.exit_stack);
-            // now our block is basically a transformation: it takes the top of the stack as
-            // outlined in current.entry_stack and transforms it into whatever's in
-            // current.exit_stack. so transform the stack accordingly
-            stack.drain(stack.len() - current.entry_stack.len()..);
-            stack.append(&mut current.exit_stack.clone());
-            println!("{}{} stack after is {:?}", self.name, current_id, stack);
+            println!("get {:?}", entry_stack);
+            println!("leave {:?}", exit_stack);
             
             // then we can propagate the outputs to the successors
             for succ_id in current.successors.iter() {
-                // only visit successors if you haven't visited them yet, and
-                // they're not already slated for reprocessing
-                if (!visited.contains(succ_id)) && !todo_ids.contains(succ_id) {
-                    todo_ids.push_back(*succ_id);
+                // if you've already seen this successor (they already have an entry stack
+                // propagated from somewhere else)
+                // check consistency with what you got this time around
+                if let Some(existing_entry_stack) = entry_stacks.get(succ_id) {
+                    if *existing_entry_stack != exit_stack {
+                        logger.error("unable to reconcile types at block merge point".to_string(), current.pos.line, current.pos.col);
+                    }
+                }
+                else {
+                    entry_stacks.insert(*succ_id, exit_stack.clone());
+                    if !todo_ids.contains(succ_id) {
+                        todo_ids.push_back(*succ_id);
+                    }
                 }
             }
         }
 
+        // this bit works, now entry and exit stacks are fully resolved
+        // probably now the thing would be to simulate block walkthroughs one last time and check
+        // types as you go
+
         // now all the entry stacks are fully resolved
         // we can check constraints and resolve exit stacks
-        for current in &mut self.blocks {
+        /*for current in &mut self.blocks {
             // first step is to check block constraints
             // first do equality constraints
             for (a, b, pos) in current.const_equal.iter() {
@@ -360,7 +350,7 @@ impl Procedure {
                     }
                 }
             }
-        }
+        }*/
     }
 
     pub fn build_jumps_and_blocks(&mut self, logger: &mut dyn Logger) {
