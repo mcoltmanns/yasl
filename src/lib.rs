@@ -1,12 +1,14 @@
 pub mod tokenizer;
-//pub mod parser;
-//pub mod statement;
+pub mod parser;
+pub mod statement;
 //pub mod procedure;
 //pub mod basicblock;
 //pub mod regmachine;
 pub mod datastructures;
 
 pub mod logger {
+    use crate::util::FilePos;
+
     pub enum EventKind {
         Error,
         Warning,
@@ -23,16 +25,16 @@ pub mod logger {
     pub trait Logger {
         fn log(&mut self, event: LogEvent);
 
-        fn error(&mut self, msg: String, line: usize, col: usize) {
-            self.log(LogEvent { kind: EventKind::Error, msg, line, col });
+        fn error(&mut self, msg: &str, pos: FilePos) {
+            self.log(LogEvent { kind: EventKind::Error, msg: msg.to_string(), line: pos.line, col: pos.col });
         }
 
-        fn warning(&mut self, msg: String, line: usize, col: usize) {
-            self.log(LogEvent { kind: EventKind::Warning, msg, line, col });
+        fn warning(&mut self, msg: &str, pos: FilePos) {
+            self.log(LogEvent { kind: EventKind::Warning, msg: msg.to_string(), line: pos.line, col: pos.col });
         }
 
-        fn info(&mut self, msg: String) {
-            self.log(LogEvent { kind: EventKind::Info, msg, line: 0, col: 0 });
+        fn info(&mut self, msg: &str) {
+            self.log(LogEvent { kind: EventKind::Info, msg: msg.to_string(), line: 0, col: 0 });
         }
 
         fn has_error(&self) -> bool;

@@ -1,7 +1,7 @@
 use half::f16;
 use std::fmt::Display;
 
-use crate::util::{FilePos, Positionable};
+use crate::{datastructures::token::{Token, TokenPayload}, util::{FilePos, Positionable}};
 
 #[derive(Debug)]
 pub enum DType {
@@ -21,6 +21,47 @@ pub enum DType {
 impl DType {
     pub fn is_integer(&self) -> bool {
         matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::U8 | Self::U16 | Self::U32 | Self::U64)
+    }
+
+    pub fn from_token(t: &Token) -> Result<Self, String> {
+        match t.payload() {
+            TokenPayload::IType(w) => {
+                match w {
+                    8 => Ok(Self::I8),
+                    16 => Ok(Self::I16),
+                    32 => Ok(Self::I32),
+                    64 => Ok(Self::I64),
+                    _ => {
+                        Err(format!("invalid integer width {}", w))
+                    }
+                }
+            }
+            TokenPayload::UType(w) => {
+                match w {
+                    8 => Ok(Self::U8),
+                    16 => Ok(Self::U16),
+                    32 => Ok(Self::U32),
+                    64 => Ok(Self::U64),
+                    _ => {
+                        Err(format!("invalid unsigned integer width {}", w))
+                    }
+                }
+            }
+            TokenPayload::FType(w) => {
+                match w {
+                    16 => Ok(Self::F16),
+                    32 => Ok(Self::F32),
+                    64 => Ok(Self::F64),
+                    _ => {
+                        Err(format!("invalid float width {}", w))
+                    }
+                }
+            }
+            TokenPayload::PtrType => Ok(Self::Pointer),
+            _ => {
+                Err(format!("unknown type {}", t))
+            }
+        }
     }
 }
 impl From<&Literal> for DType {
@@ -42,7 +83,7 @@ impl From<&Literal> for DType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     Pointer(u64),
     I8(i8),
@@ -56,6 +97,40 @@ pub enum Literal {
     F16(f16),
     F32(f32),
     F64(f64),
+}
+impl Literal {
+    pub fn from_token(t: &Token, dtype: &DType) -> Result<Self, String> {
+        match t.payload() {
+            TokenPayload::Literal(st) => {
+                let (repr, radix) =
+                if let Some(s) = st.strip_prefix("0x") {
+                    (s, 16)
+                } else if let Some(s) = st.strip_prefix("0b") {
+                    (s, 2)
+                } else {
+                    (st.as_str(), 10)
+                };
+
+                match dtype {
+                    DType::I8 => i8::from_str_radix(repr, radix).map(Literal::I8).map_err(|e| e.to_string()),
+                    DType::I16 => i16::from_str_radix(repr, radix).map(Literal::I16).map_err(|e| e.to_string()),
+                    DType::I32 => i32::from_str_radix(repr, radix).map(Literal::I32).map_err(|e| e.to_string()),
+                    DType::I64 => i64::from_str_radix(repr, radix).map(Literal::I64).map_err(|e| e.to_string()),
+                    DType::U8 => u8::from_str_radix(repr, radix).map(Literal::U8).map_err(|e| e.to_string()),
+                    DType::U16 => u16::from_str_radix(repr, radix).map(Literal::U16).map_err(|e| e.to_string()),
+                    DType::U32 => u32::from_str_radix(repr, radix).map(Literal::U32).map_err(|e| e.to_string()),
+                    DType::U64 => u64::from_str_radix(repr, radix).map(Literal::U64).map_err(|e| e.to_string()),
+                    DType::F16 => repr.parse::<f16>().map(Literal::F16).map_err(|e| e.to_string()),
+                    DType::F32 => repr.parse::<f32>().map(Literal::F32).map_err(|e| e.to_string()),
+                    DType::F64 => repr.parse::<f64>().map(Literal::F64).map_err(|e| e.to_string()),
+                    DType::Pointer => u64::from_str_radix(repr, radix).map(Literal::Pointer).map_err(|e| e.to_string()),
+                }
+            }
+            _ => {
+                Err("cannot parse literal from nonliteral token".to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -101,6 +176,11 @@ pub enum StatementPayload {
 pub struct Statement {
     payload: StatementPayload,
     pos: FilePos,
+}
+impl Statement {
+    pub fn new(payload: StatementPayload, pos: FilePos) -> Self {
+        Self { payload, pos }
+    }
 }
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

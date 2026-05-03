@@ -5,38 +5,36 @@
 // does not do typechecking
 // does not build any symbol tables
 use std::collections::HashMap;
-use half::f16;
-use crate::tokenizer::Token;
-use crate::tokenizer::TokenKind;
+use crate::datastructures::statement::{DType, Literal, Statement, StatementPayload};
+use crate::datastructures::token::{Token, TokenPayload};
 use crate::logger::Logger;
-use crate::statement::Statement;
-use crate::statement::DType;
-use crate::statement::StatementKind;
-use crate::statement::Literal;
-use crate::statement::LiteralValue;
+use crate::util::Positionable;
 
-pub struct Parser<'a>{
+pub struct Parser{
     tokens: std::iter::Peekable<std::vec::IntoIter<Token>>,
-    logger: &'a mut dyn Logger,
     constants: HashMap<String, Literal>,
-    pub statements: Vec<Statement>
+    statements: Vec<Statement>
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token>, logger: &'a mut impl Logger) -> Self {
-        Parser { tokens: tokens.into_iter().peekable(), logger, constants: HashMap::new(), statements: Vec::new() }
+impl Parser {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens: tokens.into_iter().peekable(), constants: HashMap::new(), statements: Vec::new() }
     }
 
-    pub fn parse_tokens(&mut self) {
+    pub fn statements(&self) -> &Vec<Statement> {
+        &self.statements
+    }
+
+    pub fn parse_tokens(&mut self, logger: &mut dyn Logger) {
         loop {
             if let Some(t) = self.tokens.peek() {
-                match t.content {
-                    TokenKind::Eof => {
-                        self.tokens.next();
-                        break;
-                    }
-                    _ => self.parse_statement(),
-                };
+                if t.is_eof() {
+                    self.tokens.next();
+                    break;
+                }
+                else {
+                    self.parse_statement(logger);
+                }
             }
             else {
                 self.tokens.next();
@@ -45,7 +43,7 @@ impl<'a> Parser<'a> {
         }
 
         if let Some(t) = self.tokens.peek() {
-            self.logger.error("more tokens after EOF (how did you manage that?)".to_string(), t.pos.line, t.pos.col);
+            logger.error("more tokens after EOF (how did you manage that?)", t.pos().clone());
         }
     }
 
@@ -53,319 +51,269 @@ impl<'a> Parser<'a> {
     // a panic should never happen - it means the token stream is malformed somehow
     // in cases where a statement could not be parsed but it was programmer error, this just
     // returns None
-    fn parse_statement(&mut self) {
+    fn parse_statement(&mut self, logger: &mut dyn Logger) {
         // we unwrap when getting a next token and expecting one to be there because if the token stream
         // is out of tokens already it's a bug, not a normal error case
         let t = self.tokens.next().unwrap();
         // all statements start with a control word, so check what that is
-        match t.content {
+        match t.payload() {
             // implicit args are one word, and can be parsed directly
-            TokenKind::Pop => self.statements.push(Statement::new(StatementKind::Pop, t.pos)),
-            TokenKind::Dup => self.statements.push(Statement::new(StatementKind::Dup, t.pos)),
-            TokenKind::Swap => self.statements.push(Statement::new(StatementKind::Swap, t.pos)),
-            TokenKind::Add => self.statements.push(Statement::new(StatementKind::Add, t.pos)),
-            TokenKind::Sub => self.statements.push(Statement::new(StatementKind::Sub, t.pos)),
-            TokenKind::Div => self.statements.push(Statement::new(StatementKind::Div, t.pos)),
-            TokenKind::Mult => self.statements.push(Statement::new(StatementKind::Mult, t.pos)),
-            TokenKind::Mod => self.statements.push(Statement::new(StatementKind::Mod, t.pos)),
-            TokenKind::Inc => self.statements.push(Statement::new(StatementKind::Inc, t.pos)),
-            TokenKind::Dec => self.statements.push(Statement::new(StatementKind::Dec, t.pos)),
-            TokenKind::And => self.statements.push(Statement::new(StatementKind::And, t.pos)),
-            TokenKind::Or => self.statements.push(Statement::new(StatementKind::Or, t.pos)),
-            TokenKind::Not => self.statements.push(Statement::new(StatementKind::Not, t.pos)),
-            TokenKind::Xor => self.statements.push(Statement::new(StatementKind::Xor, t.pos)),
-            TokenKind::Bsl => self.statements.push(Statement::new(StatementKind::Bsl, t.pos)),
-            TokenKind::Bsr => self.statements.push(Statement::new(StatementKind::Bsr, t.pos)),
-            TokenKind::Rol => self.statements.push(Statement::new(StatementKind::Rol, t.pos)),
-            TokenKind::Ror => self.statements.push(Statement::new(StatementKind::Ror, t.pos)),
-            TokenKind::Eq => self.statements.push(Statement::new(StatementKind::Eq, t.pos)),
-            TokenKind::Neq => self.statements.push(Statement::new(StatementKind::Neq, t.pos)),
-            TokenKind::Lt => self.statements.push(Statement::new(StatementKind::Lt, t.pos)),
-            TokenKind::Gt => self.statements.push(Statement::new(StatementKind::Gt, t.pos)),
-            TokenKind::Leq => self.statements.push(Statement::new(StatementKind::Leq, t.pos)),
-            TokenKind::Geq => self.statements.push(Statement::new(StatementKind::Geq, t.pos)),
-            TokenKind::Ret => self.statements.push(Statement::new(StatementKind::Ret, t.pos)),
+            TokenPayload::Pop => self.statements.push(Statement::new(StatementPayload::Pop, t.pos().clone())),
+            TokenPayload::Dup => self.statements.push(Statement::new(StatementPayload::Dup, t.pos().clone())),
+            TokenPayload::Swap => self.statements.push(Statement::new(StatementPayload::Swap, t.pos().clone())),
+            TokenPayload::Add => self.statements.push(Statement::new(StatementPayload::Add, t.pos().clone())),
+            TokenPayload::Sub => self.statements.push(Statement::new(StatementPayload::Sub, t.pos().clone())),
+            TokenPayload::Div => self.statements.push(Statement::new(StatementPayload::Div, t.pos().clone())),
+            TokenPayload::Mult => self.statements.push(Statement::new(StatementPayload::Mult, t.pos().clone())),
+            TokenPayload::Mod => self.statements.push(Statement::new(StatementPayload::Mod, t.pos().clone())),
+            TokenPayload::Inc => self.statements.push(Statement::new(StatementPayload::Inc, t.pos().clone())),
+            TokenPayload::Dec => self.statements.push(Statement::new(StatementPayload::Dec, t.pos().clone())),
+            TokenPayload::And => self.statements.push(Statement::new(StatementPayload::And, t.pos().clone())),
+            TokenPayload::Or => self.statements.push(Statement::new(StatementPayload::Or, t.pos().clone())),
+            TokenPayload::Not => self.statements.push(Statement::new(StatementPayload::Not, t.pos().clone())),
+            TokenPayload::Xor => self.statements.push(Statement::new(StatementPayload::Xor, t.pos().clone())),
+            TokenPayload::Bsl => self.statements.push(Statement::new(StatementPayload::Bsl, t.pos().clone())),
+            TokenPayload::Bsr => self.statements.push(Statement::new(StatementPayload::Bsr, t.pos().clone())),
+            TokenPayload::Rol => self.statements.push(Statement::new(StatementPayload::Rol, t.pos().clone())),
+            TokenPayload::Ror => self.statements.push(Statement::new(StatementPayload::Ror, t.pos().clone())),
+            TokenPayload::Eq => self.statements.push(Statement::new(StatementPayload::Eq, t.pos().clone())),
+            TokenPayload::Neq => self.statements.push(Statement::new(StatementPayload::Neq, t.pos().clone())),
+            TokenPayload::Lt => self.statements.push(Statement::new(StatementPayload::Lt, t.pos().clone())),
+            TokenPayload::Gt => self.statements.push(Statement::new(StatementPayload::Gt, t.pos().clone())),
+            TokenPayload::Leq => self.statements.push(Statement::new(StatementPayload::Leq, t.pos().clone())),
+            TokenPayload::Geq => self.statements.push(Statement::new(StatementPayload::Geq, t.pos().clone())),
+            TokenPayload::Ret => self.statements.push(Statement::new(StatementPayload::Ret, t.pos().clone())),
 
-            TokenKind::Const => {
-                let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        let kind = self.parse_type();
-                        if kind.is_none() {
-                            return;
-                        }
-                        let literal = self.parse_literal(kind.unwrap());
-                        if literal.is_none() {
-                            return;
-                        }
-                        if self.constants.insert(s, literal.unwrap()).is_some() {
-                            self.logger.error("illegal constant redefinition".to_string(), t.pos.line, t.pos.col);
+            TokenPayload::Const => {
+                let name_t = self.tokens.next().unwrap();
+                match name_t.payload() {
+                    TokenPayload::Name(s) => {
+                        let type_t = self.tokens.next().unwrap();
+                        match DType::from_token(&type_t) {
+                            Ok(dtype) => {
+                                let literal_t = self.tokens.next().unwrap();
+                                match Literal::from_token(&literal_t, &dtype) {
+                                    Ok(literal) => {
+                                        if self.constants.insert(s.clone(), literal).is_some() {
+                                            logger.error("illegal constant redefinition", t.pos().clone());
+                                        }
+                                    }
+                                    Err(msg) => {
+                                        logger.error(&msg, literal_t.pos().clone());
+                                    }
+                                }
+                            }
+                            Err(msg) => {
+                                logger.error(&msg, type_t.pos().clone());
+                            }
                         }
                     }
                     _ => {
-                        self.logger.error("expected a constant definition".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected a constant definition", name_t.pos().clone());
                     }
                 }
             }
 
-            TokenKind::Push => {
+            TokenPayload::Push => {
                 // next token can be either a name or a literal
-                let t = self.tokens.peek().unwrap();
-                let pos = t.pos.clone();
-                match &t.content {
-                    // if it is a name, consume the token, find the constant in your table, and generate the push command
-                    TokenKind::Name(s) => { 
+                let name_t = self.tokens.next().unwrap();
+                match name_t.payload() {
+                    // if it's a name, find the constant in your table and emit a push for that
+                    // value
+                    TokenPayload::Name(s) => { 
                         match self.constants.get(s) {
                             Some(value) => {
-                                self.statements.push(Statement::new(StatementKind::Push { value: value.clone() }, pos));
+                                self.statements.push(Statement::new(StatementPayload::Push { value: value.clone() }, t.pos().clone()));
                             }
                             None => {
-                                self.logger.error(format!("constant \"{}\" was not defined", s), pos.line, pos.col );
+                                logger.error(&format!("constant \"{}\" was not defined", s), t.pos().clone() );
                                 return;
                             }
                         };
                         self.tokens.next();
                     }
                     _ => {
-                        // if it isn't a name but we were able to parse a literal out of
-                        // it, build that literal token
-                        let kind = self.parse_type();
-                        if kind.is_none() {
-                            return;
+                        // if it isn't a name, try to parse a datatype
+                        match DType::from_token(&name_t) {
+                            Err(s) => {
+                                logger.error(&s, name_t.pos().clone());
+                            }
+                            Ok(to) => {
+                                // and if we could parse a datatype, try to parse the next thing as
+                                // a literal into that datatype, and emit a push for that
+                                let val_t = self.tokens.next().unwrap();
+                                match Literal::from_token(&val_t, &to) {
+                                    Err(s) => {
+                                        logger.error(&s, val_t.pos().clone());
+                                    }
+                                    Ok(literal) => {
+                                        self.statements.push(Statement::new(StatementPayload::Push { value: literal }, t.pos().clone()));
+                                    }
+                                }
+                            }
                         }
-                        let value = self.parse_literal(kind.unwrap());
-                        if value.is_none() {
-                            return;
-                        }
-                        self.statements.push(Statement::new(StatementKind::Push { value: value.unwrap() }, pos));
                     }
                 }
             }
 
-            TokenKind::Load => {
-                let kind = self.parse_type();
-                if kind.is_none () {
-                    return;
+            TokenPayload::Load => {
+                let type_t = self.tokens.next().unwrap();
+                match DType::from_token(&type_t) {
+                    Err(s) => {
+                        logger.error(&s, type_t.pos().clone());
+                    }
+                    Ok(to) => {
+                        self.statements.push(Statement::new(StatementPayload::Load { kind: to }, t.pos().clone()));
+                    }
                 }
-                self.statements.push(Statement::new(StatementKind::Load { kind: kind.unwrap() }, t.pos));
             }
 
-            TokenKind::Store => {
-                let kind = self.parse_type();
-                if kind.is_none () {
-                    return;
+            TokenPayload::Store => {
+                let type_t = self.tokens.next().unwrap();
+                match DType::from_token(&type_t) {
+                    Err(s) => {
+                        logger.error(&s, type_t.pos().clone());
+                    }
+                    Ok(to) => {
+                        self.statements.push(Statement::new(StatementPayload::Store { kind: to }, t.pos().clone()));
+                    }
                 }
-                self.statements.push(Statement::new(StatementKind::Store { kind: kind.unwrap() }, t.pos));
             }
 
-            TokenKind::Label => {
-                let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        self.statements.push(Statement::new(StatementKind::Label { name: s.to_string() }, t.pos));
+            TokenPayload::Label => {
+                let name_t = self.tokens.next().unwrap();
+                match name_t.payload() {
+                    TokenPayload::Name(s) => {
+                        self.statements.push(Statement::new(StatementPayload::Label { name: s.clone() }, t.pos().clone()));
                     }
                     _ => {
-                        self.logger.error("expected name after label".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected name after label", name_t.pos().clone());
                     }
                 }
             }
 
-            TokenKind::Jump => {
-                let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        self.statements.push(Statement::new(StatementKind::Jump { dest: s.to_string() }, t.pos));
+            TokenPayload::Jump => {
+                let dest_t = self.tokens.next().unwrap();
+                match dest_t.payload() {
+                    TokenPayload::Name(s) => {
+                        self.statements.push(Statement::new(StatementPayload::Jump { dest: s.clone() }, t.pos().clone()));
                     }
                     _ => {
-                        self.logger.error("expected label after jump".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected label after jump", dest_t.pos().clone());
                     }
                 }
             }
             
-            TokenKind::Jumpif => {
-                let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        self.statements.push(Statement::new(StatementKind::Jumpif { dest: s.to_string() }, t.pos));
+            TokenPayload::Jumpif => {
+                let dest_t = self.tokens.next().unwrap();
+                match dest_t.payload() {
+                    TokenPayload::Name(s) => {
+                        self.statements.push(Statement::new(StatementPayload::Jumpif { dest: s.clone() }, t.pos().clone()));
                     }
                     _ => {
-                        self.logger.error("expected label after jump".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected label after jump", dest_t.pos().clone());
                     }
                 }
             }
 
-            TokenKind::Proc => {
-                let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        self.expect(TokenKind::In);
-                        let ins = self.parse_type_list(TokenKind::Out);
-                        if ins.is_none() {
-                            self.logger.error("expected type list".to_string(), t.pos.line, t.pos.col);
-                            return;
+            TokenPayload::Proc => {
+                let name_t = self.tokens.next().unwrap();
+                match name_t.payload() {
+                    TokenPayload::Name(s) => {
+                        self.expect(TokenPayload::In, logger);
+                        let ins = self.parse_type_list(TokenPayload::Out);
+                        self.expect(TokenPayload::Out, logger);
+                        let outs = self.parse_type_list(TokenPayload::Def);
+                        self.expect(TokenPayload::Def, logger);
+                        match (ins, outs) {
+                            (Ok(ins_ok), Ok(outs_ok)) => {
+                                self.statements.push(Statement::new(StatementPayload::Proc { name: s.clone(), t_in: ins_ok, t_out: outs_ok }, t.pos().clone()));
+                            }
+                            (Err(err), _) | (_, Err(err))=> {
+                                logger.error(&err, t.pos().clone());
+                            }
                         }
-                        self.expect(TokenKind::Out);
-                        let outs = self.parse_type_list(TokenKind::Def);
-                        if outs.is_none() {
-                            self.logger.error("expected type list".to_string(), t.pos.line, t.pos.col);
-                            return;
-                        }
-                        self.expect(TokenKind::Def);
-                        self.statements.push(Statement::new(StatementKind::Proc { name: s, t_in: ins.unwrap(), t_out: outs.unwrap() }, t.pos));
                     }
                     _ => {
-                        self.logger.error("expected procedure name".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected procedure name", name_t.pos().clone());
                     }
                 }
             }
 
-            TokenKind::Call => {
+            TokenPayload::Call => {
                 let t = self.tokens.next().unwrap();
-                match t.content {
-                    TokenKind::Name(s) => {
-                        self.statements.push(Statement::new(StatementKind::Call { dest: s.to_string() }, t.pos));
+                match t.payload() {
+                    TokenPayload::Name(s) => {
+                        self.statements.push(Statement::new(StatementPayload::Call { dest: s.to_string() }, t.pos().clone()));
                     }
                     _ => {
-                        self.logger.error("expected label after call".to_string(), t.pos.line, t.pos.col);
+                        logger.error("expected label after call", t.pos().clone());
                     }
                 }
             }
 
-            TokenKind::Cast => {
-                let to = self.parse_type();
-                if to.is_none() {
-                    return;
+            TokenPayload::Cast => {
+                let t = self.tokens.next().unwrap();
+                match DType::from_token(&t) {
+                    Err(s) => {
+                        logger.error(&s, t.pos().clone());
+                    }
+                    Ok(to) => {
+                        self.statements.push(Statement::new(StatementPayload::Cast { to }, t.pos().clone()));
+                    }
                 }
-                self.statements.push(Statement::new(StatementKind::Cast { to: to.unwrap() }, t.pos));
             }
 
-            TokenKind::Conv => {
-                let to = self.parse_type();
-                if to.is_none() {
-                    return;
+            TokenPayload::Conv => {
+                let t = self.tokens.next().unwrap();
+                match DType::from_token(&t) {
+                    Err(s) => {
+                        logger.error(&s, t.pos().clone());
+                    }
+                    Ok(to) => {
+                        self.statements.push(Statement::new(StatementPayload::Conv { to }, t.pos().clone()));
+                    }
                 }
-                self.statements.push(Statement::new(StatementKind::Conv { to: to.unwrap() }, t.pos));
             }
 
-            TokenKind::Unknown(s) => {
-                self.logger.error(format!("unknown token \"{:?}\"", s), t.pos.line, t.pos.col);
+            TokenPayload::Unknown(s) => {
+                logger.error(&format!("unknown token \"{:?}\"", s), t.pos().clone());
             },
 
             _ => {
-                self.logger.error("unimplemented token".to_string(), t.pos.line, t.pos.col);
+                logger.error("unimplemented token", t.pos().clone());
             }
         };
     }
 
-    fn parse_type_list(&mut self, terminator: TokenKind) -> Option<Vec<DType>> {
+    fn parse_type_list(&mut self, terminator: TokenPayload) -> Result<Vec<DType>, String> {
         let mut types = Vec::new();
 
         loop {
-            let next = &self.tokens.peek()?.content;
-            if next == &terminator {
-                return Some(types);
+            if let Some(next) = self.tokens.peek() {
+                if *next.payload() == terminator {
+                    return Ok(types);
+                }
+                match DType::from_token(next) {
+                    Ok(t) => types.push(t),
+                    Err(msg) => return Err(msg)
+                }
             }
-            types.push(self.parse_type()?);
+            else {
+                return Err("expected a type list".to_string())
+            }
+            self.tokens.next();
         }
     }
 
-    fn expect(&mut self, kind: TokenKind) -> Option<Token> {
+    fn expect(&mut self, kind: TokenPayload, logger: &mut dyn Logger) -> Option<Token> {
         let next = self.tokens.next()?;
-        if next.content == kind {
+        if *next.payload() == kind {
             Some(next)
         }
         else {
-            self.logger.error(format!("expected {:?}, got {:?}", kind, next.content).to_string(), next.pos.line, next.pos.col);
+            logger.error(&format!("expected {:?}, got {:?}", kind, next.payload()), next.pos().clone());
             None
-        }
-    }
-
-    fn parse_literal(&mut self, into: DType) -> Option<Literal> {
-        let t = self.tokens.next()?;
-
-        match t.content {
-            TokenKind::Literal(st) => {
-                let (repr, radix) =
-                    if let Some(s) = st.strip_prefix("0x") {
-                        (s, 16)
-                    } else if let Some(s) = st.strip_prefix("0b") {
-                        (s, 2)
-                    } else {
-                        (st.as_str(), 10)
-                    };
-
-                let res = match into {
-                    DType::I8 => i8::from_str_radix(repr, radix).map(LiteralValue::I8).map_err(|e| e.to_string()),
-                    DType::I16 => i16::from_str_radix(repr, radix).map(LiteralValue::I16).map_err(|e| e.to_string()),
-                    DType::I32 => i32::from_str_radix(repr, radix).map(LiteralValue::I32).map_err(|e| e.to_string()),
-                    DType::I64 => i64::from_str_radix(repr, radix).map(LiteralValue::I64).map_err(|e| e.to_string()),
-                    DType::U8 => u8::from_str_radix(repr, radix).map(LiteralValue::U8).map_err(|e| e.to_string()),
-                    DType::U16 => u16::from_str_radix(repr, radix).map(LiteralValue::U16).map_err(|e| e.to_string()),
-                    DType::U32 => u32::from_str_radix(repr, radix).map(LiteralValue::U32).map_err(|e| e.to_string()),
-                    DType::U64 => u64::from_str_radix(repr, radix).map(LiteralValue::U64).map_err(|e| e.to_string()),
-                    DType::F16 => repr.parse::<f16>().map(LiteralValue::F16).map_err(|e| e.to_string()),
-                    DType::F32 => repr.parse::<f32>().map(LiteralValue::F32).map_err(|e| e.to_string()),
-                    DType::F64 => repr.parse::<f64>().map(LiteralValue::F64).map_err(|e| e.to_string()),
-                    DType::Pointer => u64::from_str_radix(repr, radix).map(LiteralValue::Pointer).map_err(|e| e.to_string()),
-                };
-                if let Err(msg) = res {
-                    self.logger.error(msg, t.pos.line, t.pos.col);
-                    None
-                }
-                else {
-                    Some(Literal::new(res.unwrap(), t.pos))
-                }
-            }
-            _ => {
-                self.logger.error("expected a literal".to_string(), t.pos.line, t.pos.col);
-                None
-            }
-        }
-    }
-
-    fn parse_type(&mut self) -> Option<DType> {
-        let t = self.tokens.next().unwrap();
-        match t.content {
-            TokenKind::IType(w) => {
-                match w {
-                    8 => Some(DType::I8),
-                    16 => Some(DType::I16),
-                    32 => Some(DType::I32),
-                    64 => Some(DType::I64),
-                    _ => {
-                        self.logger.error(format!("integers of width {} are not supported", w), t.pos.line, t.pos.col);
-                        None
-                    }
-                }
-            }
-            TokenKind::FType(w) => {
-                match w {
-                    16 => Some(DType::F16),
-                    32 => Some(DType::F32),
-                    64 => Some(DType::F64),
-                    _ => {
-                        self.logger.error(format!("floats of width {} are not supported", w), t.pos.line, t.pos.col);
-                        None
-                    }
-                }
-            }
-            TokenKind::UType(w) => {
-                match w {
-                    8 => Some(DType::U8),
-                    16 => Some(DType::U16),
-                    32 => Some(DType::U32),
-                    64 => Some(DType::U64),
-                    _ => {
-                        self.logger.error(format!("unsigned ints of width {} are not supported", w), t.pos.line, t.pos.col);
-                        None
-                    }
-                }
-            }
-            TokenKind::PtrType => Some(DType::Pointer),
-            _ => {
-                self.logger.error(format!("unknown type {}", t), t.pos.line, t.pos.col);
-                None
-            }
         }
     }
 }

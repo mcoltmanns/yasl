@@ -1,9 +1,10 @@
 use yasl::logger;
+use yasl::logger::Logger;
 //use yasl::logger::Logger;
 //use yasl::procedure::Procedure;
 //use yasl::regmachine::convert_proc_table;
 use yasl::tokenizer;
-//use yasl::parser;
+use yasl::parser;
 //use yasl::procedure;
 //use yasl::statement;
 use std::env;
@@ -28,13 +29,15 @@ fn main() {
     let mut tokenizer = tokenizer::Tokenizer::new(src_path.to_str().unwrap().to_string(), src_string);
     let tokens = tokenizer.run();
 
-    for t in &tokens {
-        println!("{}", t);
-    }
-
     // parse the input into statements
-    //let mut parser = parser::Parser::new(tokens, &mut logger);
-    //parser.parse_tokens();
+    let mut parser = parser::Parser::new(tokens);
+    parser.parse_tokens(&mut logger);
+
+    // not worth continuing if the syntax is wrong
+    if logger.has_error() {
+        println!("compilation failed");
+        return
+    }
 
     //// now we have the statements, and they're at least syntactically valid
     //// we can do the first pass to build the procedure table
