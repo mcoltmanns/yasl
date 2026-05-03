@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use crate::{datastructures::token::{Token, TokenPayload}, util::{FilePos, Positionable}};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DType {
     Pointer,
     I8,
@@ -133,7 +133,7 @@ impl Literal {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StatementPayload {
     Push { value: Literal },
     Pop,
@@ -173,6 +173,7 @@ pub enum StatementPayload {
     Geq,
 }
 
+#[derive(Debug, Clone)]
 pub struct Statement {
     payload: StatementPayload,
     pos: FilePos,
@@ -180,6 +181,10 @@ pub struct Statement {
 impl Statement {
     pub fn new(payload: StatementPayload, pos: FilePos) -> Self {
         Self { payload, pos }
+    }
+
+    pub fn payload(&self) -> &StatementPayload {
+        &self.payload
     }
 }
 impl Display for Statement {

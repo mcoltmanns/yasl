@@ -1,3 +1,4 @@
+use yasl::datastructures::program::Program;
 use yasl::logger;
 use yasl::logger::Logger;
 //use yasl::logger::Logger;
@@ -36,62 +37,18 @@ fn main() {
     // not worth continuing if the syntax is wrong
     if logger.has_error() {
         println!("compilation failed");
-        return
+        return;
     }
 
-    //// now we have the statements, and they're at least syntactically valid
-    //// we can do the first pass to build the procedure table
-    //// procedure table maps procedure names to procedures
-    //// construct procedure table
-    //let mut procedure_table = procedure::ProcedureTable::new();
-    //let mut signature_table = procedure::SignatureTable::new();
+    let mut ir_program = Program::new(parser.statements(), &mut logger);
+    println!("{}", ir_program);
 
-    //let mut current_proc: Option<Procedure> = None;
-    //let mut current_statements = vec![];
-    //for s in &parser.statements {
-    //    match s.kind() {
-    //        statement::StatementKind::Proc { name , t_in, t_out } => {
-    //            if let Some(mut prev_proc) = current_proc {
-    //                prev_proc.set_statements(current_statements);
-    //                current_statements = vec![];
-    //                signature_table.insert(prev_proc.name().clone(), (prev_proc.get_intypes().clone(), prev_proc.get_outtypes().clone()));
-    //                procedure_table.insert(prev_proc.name().clone(), prev_proc);
-    //            }
-    //            if procedure_table.contains_key(name) {
-    //                logger.error(format!("procedure \"{}\" defined twice", name), s.pos().line, s.pos().col);
-    //            }
-    //            current_proc = Some(Procedure::new(name.clone(), s.pos().clone(), t_in.clone(), t_out.clone(), vec![]));
-    //        }
-    //        _ => {
-    //            match &current_proc {
-    //                Some(_) => {
-    //                    current_statements.push(s.clone());
-    //                }
-    //                None => {
-    //                    logger.warning("unreachable code".to_string(), s.pos().line, s.pos().col);
-    //                }
-    //            }
-    //        }
-    //    }
-    //}
-    //if let Some(mut prev_proc) = current_proc {
-    //    prev_proc.set_statements(current_statements);
-    //    signature_table.insert(prev_proc.name().clone(), (prev_proc.get_intypes().clone(), prev_proc.get_outtypes().clone()));
-    //    procedure_table.insert(prev_proc.name().to_string(), prev_proc);
-    //}
+    for p in ir_program.procedures_mut() {
+        p.build_blocks_and_jumps(&mut logger);
+        p.link_blocks(&mut logger);
+        p.check_block_reachability(&mut logger);
+    }
 
-    //if !procedure_table.contains_key("main") {
-    //    logger.error("no main procedure defined".to_string(), 0, 0);
-    //}
-
-    //// procedure-local analysis
-    //// build procedure jump table and blocks
-    //// and simulate type stack within the procedure
-    //for p in procedure_table.values_mut() {
-    //    // build jump table
-    //    p.build_jumps_and_blocks(&mut logger);
-    //    // link blocks in procedure
-    //    p.link_blocks(&mut logger);
     //    // block-local type analysis
     //    for i in 0..p.get_blocks().len() {
     //        p.compute_block_pushes_and_pops(i, &signature_table, &mut logger);
