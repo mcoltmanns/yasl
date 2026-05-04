@@ -1,3 +1,5 @@
+use crate::datastructures::TypeStack;
+use crate::datastructures::TypeStackEntry;
 use crate::util::Positionable;
 use crate::util::FilePos;
 
@@ -5,7 +7,10 @@ use crate::util::FilePos;
 pub struct BasicBlock {
     start: usize,
     length: usize,
-    pos: FilePos
+    pos: FilePos,
+
+    pops: usize,
+    pushes: TypeStack,
 }
 impl Positionable for BasicBlock {
     fn pos(&self) -> &FilePos {
@@ -20,7 +25,7 @@ impl Positionable for BasicBlock {
 }
 impl BasicBlock {
     pub fn new(start: usize, length: usize, pos: FilePos) -> Self {
-        BasicBlock { start, length, pos }
+        BasicBlock { start, length, pos, pops: 0, pushes: vec![] }
     }
 
     pub fn start(&self) -> usize {
@@ -33,5 +38,21 @@ impl BasicBlock {
 
     pub fn set_length(&mut self, length: usize) {
         self.length = length
+    }
+
+    pub fn pops(&self) -> usize {
+        self.pops
+    }
+
+    pub fn inc_pops(&mut self) {
+        self.pops += 1
+    }
+
+    pub fn pushes(&self) -> &TypeStack {
+        &self.pushes
+    }
+
+    pub fn set_pushes(&mut self, entry: Vec<TypeStackEntry>) {
+        self.pushes = entry;
     }
 }

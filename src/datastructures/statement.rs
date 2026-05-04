@@ -1,9 +1,9 @@
 use half::f16;
-use std::fmt::Display;
+use std::{fmt::Display};
 
-use crate::{datastructures::token::{Token, TokenPayload}, util::{FilePos, Positionable}};
+use crate::{datastructures::{token::{Token, TokenPayload}}, util::{FilePos, Positionable}};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DType {
     Pointer,
     I8,

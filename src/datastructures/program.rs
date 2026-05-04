@@ -62,9 +62,9 @@ impl Program {
         Program { proc_table }
     }
 
-    pub fn sig_table(&self) -> HashMap<&String, (&[DType], &[DType])> {
+    pub fn sig_table(&self) -> HashMap<String, (Vec<DType>, Vec<DType>)> {
         self.proc_table.iter().map(|(name, proc)| {
-            (name, (proc.types_in(), proc.types_out()))
+            (name.clone(), (proc.types_in().to_vec(), proc.types_out().to_vec()))
         }).collect()
     }
 

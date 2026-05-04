@@ -41,13 +41,15 @@ fn main() {
     }
 
     let mut ir_program = Program::new(parser.statements(), &mut logger);
-    println!("{}", ir_program);
+    let sig_table = ir_program.sig_table();
 
     for p in ir_program.procedures_mut() {
         p.build_blocks_and_jumps(&mut logger);
         p.link_blocks(&mut logger);
         p.check_block_reachability(&mut logger);
+        p.compute_block_stack_effets(&sig_table, &mut logger);
     }
+    println!("{}", ir_program);
 
     //    // block-local type analysis
     //    for i in 0..p.get_blocks().len() {
