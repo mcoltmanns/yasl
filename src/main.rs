@@ -1,13 +1,8 @@
 use yasl::datastructures::program::Program;
 use yasl::logger;
 use yasl::logger::Logger;
-//use yasl::logger::Logger;
-//use yasl::procedure::Procedure;
-//use yasl::regmachine::convert_proc_table;
 use yasl::tokenizer;
 use yasl::parser;
-//use yasl::procedure;
-//use yasl::statement;
 use std::env;
 use std::fs;
 
@@ -22,7 +17,8 @@ fn main() {
     let src_string = match fs::read_to_string(src_path) {
         Ok(s) => s,
         Err(err) => {
-            panic!("Could not open file: {err:?}")
+            println!("unable to open file \"{}\": {}", src_path.to_str().unwrap(), err);
+            return;
         }
     };
 
@@ -40,51 +36,26 @@ fn main() {
         return;
     }
 
+    // build the procedure table and derive a signature table from it
     let mut ir_program = Program::new(parser.statements(), &mut logger);
     let sig_table = ir_program.sig_table();
 
+    // for every procedure, link the blocks and build the jump table
+    // make sure all blocks are reachable
+    // and then do type resolution and checking
     for p in ir_program.procedures_mut() {
         p.build_blocks_and_jumps(&mut logger);
         p.link_blocks(&mut logger);
         p.check_block_reachability(&mut logger);
         p.compute_block_stack_effets(&sig_table, &mut logger);
+        p.resolve_types(&sig_table, &mut logger);
+    }
+    // not worth continuing if the types are wrong
+    if logger.has_error() {
+        println!("compilation failed");
+        return;
     }
     println!("{}", ir_program);
-
-    //    // block-local type analysis
-    //    for i in 0..p.get_blocks().len() {
-    //        p.compute_block_pushes_and_pops(i, &signature_table, &mut logger);
-    //    }
-    //    // procedure-local type resolution
-    //    // because we have fixpoints for types in a procedure signature, all type
-    //    // resolution can take place at the procedural level
-    //    // this also checks for non-returning procedures (ensures all reachable blocks without
-    //    // successors have a return statement)
-    //    p.resolve_types(&mut logger);
-    //}
-
-    //for p in procedure_table.values() {
-    //    println!("{} {:?} {:?}", p.name(), p.get_intypes(), p.get_outtypes());
-    //    for s in p.get_statements() {
-    //        println!("  {}", s);
-    //    }
-    //    for (i, b) in p.get_blocks().iter().enumerate() {
-    //        println!("  Basic block {} begins at statement {} and has length {}", i, b.start, b.length);
-    //        println!("    Predecessors are: {:?}", b.predecessors);
-    //        println!("    Successors are: {:?}", b.successors);
-    //        println!("    Requires: {:?}", b.pops);
-    //        println!("    Leaves: {:?}", b.pushes);
-    //    }
-    //}
-
-    //// generally speaking we try to continue through and give as many errors as possible to
-    //// inform the developer
-    //// but emitting code that has produced errors is undefined behavior
-    //// so exit before emission if errors were produced
-    //if logger.has_error() {
-    //    println!("compilation failed with errors");
-    //    return
-    //}
 
     //// so now we know the program is correct (at least as correct as we can know it to be)
     //// it's time to think about code generation

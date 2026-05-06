@@ -45,6 +45,7 @@ pub enum TokenPayload {
     In,
     Out,
     Def,
+    Trap,
 
     // these are all literals
     // tokenizer does not parse them, only extract
@@ -113,6 +114,7 @@ impl From<&str> for TokenPayload {
             "in" => Self::In,
             "out" => Self::Out,
             "def" => Self::Def,
+            "trap" => Self::Trap,
             word => {
                 // if we didn't match a keyword, this must be a literal or a name
                 // literals all start with - or any digit

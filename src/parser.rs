@@ -84,6 +84,10 @@ impl Parser {
             TokenPayload::Geq => self.statements.push(Statement::new(StatementPayload::Geq, t.pos().clone())),
             TokenPayload::Ret => self.statements.push(Statement::new(StatementPayload::Ret, t.pos().clone())),
 
+            TokenPayload::Trap => { 
+                unimplemented!()
+            }
+
             TokenPayload::Const => {
                 let name_t = self.tokens.next().unwrap();
                 match name_t.payload() {

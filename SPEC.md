@@ -101,3 +101,7 @@ E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u
 - ret
     - return from a procedure (to the caller).
     - when ret is called, a procedure's data stack must contain only the types defined in its signature.
+
+### Interrupts
+- trap <vector>
+    - trigger a maskable software interrupt with the given vector.

@@ -4,6 +4,10 @@ use std::fmt::Display;
 
 pub struct Program {
     proc_table: HashMap<String, Procedure>,
+
+    // later on there will be more things to think about here
+    // target? memory layout?
+    // things that we need to actually get the program to run
 }
 
 impl Program {
@@ -32,7 +36,7 @@ impl Program {
                         logger.error(&format!("procedure \"{}\" defined twice", name), s.pos().clone());
                     }
                     // start a new procedure
-                    current_proc = Some(Procedure::empty(name.clone(), t_in.clone(), t_out.clone()));
+                    current_proc = Some(Procedure::empty(name.clone(), t_in.clone(), t_out.clone(), s.pos().clone()));
                 }
                 _ => {
                     match &current_proc {

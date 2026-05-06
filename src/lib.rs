@@ -1,7 +1,5 @@
 pub mod tokenizer;
 pub mod parser;
-//pub mod basicblock;
-//pub mod regmachine;
 pub mod datastructures;
 
 pub mod logger {

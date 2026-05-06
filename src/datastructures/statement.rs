@@ -149,6 +149,7 @@ pub enum StatementPayload {
     Cast { to: DType },
     Conv { to: DType },
     Proc { name: String, t_in: Vec<DType>, t_out: Vec<DType> },
+    Trap { vec: Literal, t_in: Vec<DType>, t_out: Vec<DType> },
 
     Add,
     Sub,
