@@ -56,13 +56,42 @@ fn main() {
         println!("compilation failed");
         return;
     }
-    println!("{}", ir_program);
 
     // now the program is correct
-    // next step is to lower to a virtual register/virtual instruction ir
-    // here we can already emit typed math instructions
-    // but stick to infinite registers for now
-    // register allocation depends on the target
+    // the compiler can throw no more errors, the only things that can go wrong from here on out
+    // are internal and cause crashes
+    // first we lower the program to infinite virtual registers
     let vreg_program = VRegProgram::lower(&ir_program);
     println!("{}", vreg_program);
+
+    // then we select our target and do register allocation and instruction selection based on that
+    // get linear scan working first, then maybe worry about graph coloring
+    // we want to target: x86_64 (64 bit) x86 (32 bit) 6502 (8 bit)
+    // probably do the 6502 first, because it is the simplest
+    // targets own their allocators and their emitters
+
+    // linear scan allocation
+    // within a procedure, determine live ranges of your registers
+    // a register goes live when it is first used and goes dead when it is last used
+    // registers which have overlapping live ranges will need to be spilled
+    // careful - registers used in loops are live for the whole loop (from the label to the jump)
+    // plus any use points after the jump
+    
+    // 6502
+    // we are targeting bare metal 6502
+    // accumulator (A)
+    // in many cases operations can be performed directly on the accumulator
+    // pretty much everything runs through A
+    // X and Y are really only useful for indexing
+    // the stack is tiny. only use it for jsr/rts and pha/pla
+    // your accumulator is only 8 bits. everything will need to be spilled.
+    // the hardware stack is at $0100 to $01ff, zero page is $0000-$00ff and is very fast. but
+    // limited.
+    // if things are in zero page they can also be used for indirect addressing
+    // prioritize allocating zero page to pointers
+    // our magic infinite registers are almost all wider than 8 bits.
+    // map virtual registers to real locations, which have an address (u16) and a width (u8), both
+    // in bytes
+    //
+    // first step: map virtual registers to real locations
 }

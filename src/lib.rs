@@ -2,6 +2,7 @@ pub mod tokenizer;
 pub mod parser;
 pub mod datastructures;
 pub mod regmachine;
+pub mod target;
 
 pub mod logger {
     use crate::util::FilePos;

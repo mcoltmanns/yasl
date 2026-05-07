@@ -245,10 +245,6 @@ pub enum VRegInstruction {
     // conv does not need an instruction, we just move the value into a new register of the
     // destination type
     
-    // push a value to the stack from a virtual register
-    Push { src: VReg },
-    // pop a value from the stack to a virtual register
-    Pop { dest: VReg },
     Label { name: String },
     // jump to a label
     Jump { dest: String },
@@ -257,7 +253,7 @@ pub enum VRegInstruction {
     // jump to a label and push a return address to the stack
     Call { dest: String, inputs: Vec<VReg>, outputs: Vec<VReg> },
     // pop the stack and jump to that address to continue execution
-    Ret,
+    Ret { regs: Vec<VReg> },
 
     // we don't need to type operations, because their type can be determined from the registers
     // they operate on
@@ -282,4 +278,41 @@ pub enum VRegInstruction {
     Leq { dest: VReg, a: VReg, b: VReg },
     Gt  { dest: VReg, a: VReg, b: VReg },
     Geq { dest: VReg, a: VReg, b: VReg },
+}
+impl VRegInstruction {
+    pub fn registers(&self) -> Vec<VReg> {
+        match self {
+            Self::Add { dest, a, b }
+            | Self::Sub { dest, a, b }
+            | Self::Mul { dest, a, b }
+            | Self::Div { dest, a, b }
+            | Self::Mod { dest, a, b }
+            | Self::And { dest, a, b }
+            | Self::Or { dest, a, b }
+            | Self::Xor { dest, a, b }
+            | Self::Eq { dest, a, b }
+            | Self::Neq { dest, a, b }
+            | Self::Lt { dest, a, b }
+            | Self::Leq { dest, a, b }
+            | Self::Gt { dest, a, b }
+            | Self::Geq { dest, a, b } => vec![*dest, *a, *b],
+            Self::Inc { dest, a }
+            | Self::Dec { dest, a }
+            | Self::Not { dest, a }
+            | Self::Bsl { dest, a }
+            | Self::Bsr { dest, a }
+            | Self::Rol { dest, a }
+            | Self::Ror { dest, a } => vec![*dest, *a],
+            Self::Cast { dest, src, .. }
+            | Self::Move { src, dest } => vec![*src, *dest],
+            Self::LoadMem { addr, dest } => vec![*addr, *dest],
+            Self::Store { addr, src, .. } => vec![*addr, *src],
+            Self::Jumpif { dest: _, cmp } => vec![*cmp],
+            Self::Ret { regs } => regs.clone(),
+            Self::Call { inputs, .. } => inputs.clone(),
+            Self::LoadImm { dest, .. } => vec![*dest],
+            | Self::Jump { .. }
+            | Self::Label { .. } => vec![],
+        }
+    }
 }

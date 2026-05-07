@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::fmt::write;
 
 use crate::datastructures::TypeStackEntry;
 use crate::datastructures::basicblock::BasicBlock;
@@ -577,11 +578,34 @@ impl Display for VirtualProcedure {
     }
 }
 
+pub struct LiveInterval {
+    // the register this interval affects
+    register: VReg,
+    // the instruction in the procedure where this interval starts
+    start: usize,
+    // how long the interval goes for
+    length: usize,
+}
+impl LiveInterval {
+    pub fn new(register: VReg, start: usize, length: usize) -> Self {
+        assert_ne!(length, 0);
+        LiveInterval { register, start, length }
+    }
+
+    pub fn overlaps(&self, other: &LiveInterval) -> bool {
+        let self_end = self.start + self.length - 1;
+        let other_end = other.start + other.length - 1;
+        self.start <= other_end && other.start <= self_end
+    }
+}
+
+
 pub struct VRegProcedure {
     name: String,
     inputs: Vec<VReg>,
     outputs: Vec<VReg>,
-    instructions: Vec<VRegInstruction>
+    instructions: Vec<VRegInstruction>,
+    live_ranges: HashMap<usize, LiveInterval>,
 }
 impl VRegProcedure {
     pub fn lower(ir_proc: &VirtualProcedure, sig_table: &HashMap<String, (Vec<DType>, Vec<DType>)>) -> Self {
@@ -589,14 +613,33 @@ impl VRegProcedure {
         // block input and output registers are propagated in call order
         // because the language uses implicit fallthroughs and we don't insert jump instructions
         // for the implicit fallthroughs, we have to emit blocks in source order
+        // here we also track live ranges of virtual registers
         let mut allocator = VRegAllocator::new();
+        let mut ranges: HashMap<usize, LiveInterval> = HashMap::new();
+
+        fn update_live_range(range_map: &mut HashMap<usize, LiveInterval>, reg: VReg, statement_index: usize) {
+            if let Some(range) = range_map.get_mut(&reg.id()) {
+                range.length = 1 + statement_index - range.start;
+            }
+            else {
+                range_map.insert(reg.id(), LiveInterval::new(reg, statement_index, 1));
+            }
+        }
 
         // allocate registers for outputs and inputs
         let proc_inputs: Vec<VReg> = ir_proc.types_in().iter().map(
-            |slot| allocator.fresh(*slot)
+            |slot| { 
+                // input registers are live from statement 0
+                let reg = allocator.fresh(*slot);
+                update_live_range(&mut ranges, reg, 0);
+                reg
+            }
         ).collect();
         let proc_outputs: Vec<VReg> = ir_proc.types_out().iter().map(
-            |slot| allocator.fresh(*slot)
+            |slot| {
+                // output registers do not become live until they are moved into
+                allocator.fresh(*slot)
+            }
         ).collect();
 
         // register entry stack map, preload 0th block with procedure inputs
@@ -621,7 +664,7 @@ impl VRegProcedure {
             let mut reg_stack = reg_stacks.get(&current_id).unwrap().clone();
             // simulate on the entry stack
             // allocate new registers if you need to
-            for s in ir_proc.view_block(current_id).unwrap() {
+            for s in ir_proc.view_block(current_id).unwrap().iter() {
                 match s.payload() {
                     StatementPayload::Push { value } => {
                         let dest = allocator.fresh(value.into());
@@ -802,7 +845,14 @@ impl VRegProcedure {
                         instructions.push(VRegInstruction::Cast { dest, src, to: *to });
                     }
                     StatementPayload::Conv { to } => {
-                        reg_stack.last_mut().unwrap().change_type(*to);
+                        // we don't really need to emit an instruction here, but emitting one is
+                        // the easiest option
+                        // we can't just change the type because that would have funky effects on
+                        // previously processed statements
+                        let src = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*to);
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Move { dest, src })
                     }
                     StatementPayload::Call { dest } => {
                         // get call info from the table
@@ -839,7 +889,7 @@ impl VRegProcedure {
                             instructions.push(VRegInstruction::Move { dest: *slot, src: *from });
                         }
                         // then return from the stack
-                        instructions.push(VRegInstruction::Ret);
+                        instructions.push(VRegInstruction::Ret { regs: proc_outputs.clone() });
                     }
                     _ => unimplemented!()
                 };
@@ -855,7 +905,10 @@ impl VRegProcedure {
                     assert_eq!(reg_stack.len(), succ_regs.len());
                     for (mine, theirs) in reg_stack.iter().zip(succ_regs.iter()) {
                         assert_eq!(mine.holds(), theirs.holds());
-                        instructions.push(VRegInstruction::Move { dest: *theirs, src: *mine });
+                        // only move if the registers are different
+                        if mine.id() != theirs.id() {
+                            instructions.push(VRegInstruction::Move { dest: *theirs, src: *mine });
+                        }
                     }
                 }
                 // otherwise just set their entry stack to your exit stack (no need to move or allocate new
@@ -871,18 +924,26 @@ impl VRegProcedure {
         }
 
         // now we have to emit instructions in source order
+        // here we also calculate the live ranges
+        let mut global_inst_i: usize = 0;
         let mut instructions = vec![];
         // block ids in ascending order is source order
         for block_id in 0..ir_proc.blocks().len() {
             if let Some(instrs) = block_instrs.remove(&block_id) {
-                instructions.extend(instrs);
+                for instruction in instrs {
+                    for reg in instruction.registers() {
+                        update_live_range(&mut ranges, reg, global_inst_i);
+                    }
+                    instructions.push(instruction);
+                    global_inst_i += 1;
+                }
             }
             else {
                 panic!()
             }
         }
 
-        VRegProcedure { name: ir_proc.name().clone(), inputs: proc_inputs, outputs: proc_outputs, instructions }
+        VRegProcedure { name: ir_proc.name().clone(), inputs: proc_inputs, outputs: proc_outputs, instructions, live_ranges: ranges }
     }
 }
 impl Display for VRegProcedure {
@@ -898,6 +959,10 @@ impl Display for VRegProcedure {
         }
         for i in self.instructions.iter() {
             write!(f, "\n  {:?}", i)?;
+        }
+        write!(f, "\n  live ranges:")?;
+        for (_, range) in self.live_ranges.iter() {
+            write!(f, "\n  {}: start {}, length {}", range.register, range.start, range.length)?;
         }
         Ok(())
     }

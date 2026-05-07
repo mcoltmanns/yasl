@@ -1,5 +1,5 @@
-use std::collections::{HashMap, hash_map::ValuesMut};
-use crate::{datastructures::{procedure::VirtualProcedure, statement::{DType, StatementPayload, VirtualStatement}}, logger::Logger, util::{FilePos, Positionable}};
+use std::collections::{HashMap, HashSet, hash_map::ValuesMut};
+use crate::{datastructures::{procedure::VirtualProcedure, statement::{DType, StatementPayload, VirtualStatement}}, logger::Logger, regmachine::VReg, util::{FilePos, Positionable}};
 use crate::datastructures::procedure::VRegProcedure;
 use std::fmt::Display;
 
