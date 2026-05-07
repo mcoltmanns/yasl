@@ -1,9 +1,9 @@
 use half::f16;
 use std::{fmt::Display};
 
-use crate::{datastructures::{token::{Token, TokenPayload}}, util::{FilePos, Positionable}};
+use crate::{datastructures::token::{Token, TokenPayload}, regmachine::VReg, util::{FilePos, Positionable}};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     Pointer,
     I8,
@@ -175,20 +175,29 @@ pub enum StatementPayload {
 }
 
 #[derive(Debug, Clone)]
-pub struct Statement {
+pub struct VirtualStatement {
     payload: StatementPayload,
     pos: FilePos,
+    math_type: Option<DType>,
 }
-impl Statement {
+impl VirtualStatement {
     pub fn new(payload: StatementPayload, pos: FilePos) -> Self {
-        Self { payload, pos }
+        Self { payload, pos, math_type: None }
     }
 
     pub fn payload(&self) -> &StatementPayload {
         &self.payload
     }
+
+    pub fn set_type(&mut self, t: DType) {
+        self.math_type = Some(t);
+    }
+
+    pub fn math_type(&self) -> &Option<DType> {
+        &self.math_type
+    }
 }
-impl Display for Statement {
+impl Display for VirtualStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let opt = match &self.payload {
             StatementPayload::Push { value } => format!("Push {:?}", value),
@@ -205,7 +214,7 @@ impl Display for Statement {
         write!(f, "{}", opt)
     }
 }
-impl Positionable for Statement {
+impl Positionable for VirtualStatement {
     fn pos(&self) -> &FilePos {
         &self.pos
     }
@@ -215,4 +224,62 @@ impl Positionable for Statement {
     fn line(&self) -> usize {
         self.pos.line
     }
+}
+
+// args are always dest arg1 arg2
+#[derive(Debug)]
+pub enum VRegInstruction {
+    // load a literal to a register
+    LoadImm { dest: VReg, val: Literal },
+    // load a register from memory
+    LoadMem { dest: VReg, addr: VReg },
+    // store a register to memory
+    Store { addr: VReg, src: VReg },
+
+    // copy a value from one register to another
+    Move { dest: VReg, src: VReg },
+
+    // cast a value in a register
+    // this might change the bits stored
+    Cast { dest: VReg, src: VReg, to: DType },
+    // conv does not need an instruction, we just move the value into a new register of the
+    // destination type
+    
+    // push a value to the stack from a virtual register
+    Push { src: VReg },
+    // pop a value from the stack to a virtual register
+    Pop { dest: VReg },
+    Label { name: String },
+    // jump to a label
+    Jump { dest: String },
+    // jump to a label if the value in cmp is not 0
+    Jumpif { dest: String, cmp: VReg },
+    // jump to a label and push a return address to the stack
+    Call { dest: String, inputs: Vec<VReg>, outputs: Vec<VReg> },
+    // pop the stack and jump to that address to continue execution
+    Ret,
+
+    // we don't need to type operations, because their type can be determined from the registers
+    // they operate on
+    Add { dest: VReg, a: VReg, b: VReg },
+    Sub { dest: VReg, a: VReg, b: VReg },
+    Div { dest: VReg, a: VReg, b: VReg },
+    Mul { dest: VReg, a: VReg, b: VReg }, 
+    Mod { dest: VReg, a: VReg, b: VReg },
+    Inc { dest: VReg, a: VReg },
+    Dec { dest: VReg, a: VReg },
+    And { dest: VReg, a: VReg, b: VReg },
+    Or  { dest: VReg, a: VReg, b: VReg },
+    Not { dest: VReg, a: VReg },
+    Xor { dest: VReg, a: VReg, b: VReg },
+    Bsl { dest: VReg, a: VReg },
+    Bsr { dest: VReg, a: VReg },
+    Rol { dest: VReg, a: VReg },
+    Ror { dest: VReg, a: VReg },
+    Eq  { dest: VReg, a: VReg, b: VReg },
+    Neq { dest: VReg, a: VReg, b: VReg },
+    Lt  { dest: VReg, a: VReg, b: VReg },
+    Leq { dest: VReg, a: VReg, b: VReg },
+    Gt  { dest: VReg, a: VReg, b: VReg },
+    Geq { dest: VReg, a: VReg, b: VReg },
 }

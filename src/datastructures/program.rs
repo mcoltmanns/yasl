@@ -1,24 +1,24 @@
-use std::collections::{HashMap, hash_map::{Values, ValuesMut}};
-use crate::{datastructures::{procedure::Procedure, statement::{DType, Statement, StatementPayload}}, logger::Logger, util::{FilePos, Positionable}};
+use std::collections::{HashMap, hash_map::ValuesMut};
+use crate::{datastructures::{procedure::VirtualProcedure, statement::{DType, StatementPayload, VirtualStatement}}, logger::Logger, util::{FilePos, Positionable}};
+use crate::datastructures::procedure::VRegProcedure;
 use std::fmt::Display;
 
-pub struct Program {
-    proc_table: HashMap<String, Procedure>,
+pub struct VirtualProgram {
+    proc_table: HashMap<String, VirtualProcedure>,
 
     // later on there will be more things to think about here
     // target? memory layout?
     // things that we need to actually get the program to run
 }
-
-impl Program {
+impl VirtualProgram {
     /// Constructs an IR program from a series of statements.
     /// This builds the procedure table and fills it with procedures.
     /// It does not build the procedure link table.
-    pub fn new(statements: &[Statement], logger: &mut dyn Logger) -> Self {
+    pub fn new(statements: &[VirtualStatement], logger: &mut dyn Logger) -> Self {
         let mut proc_table = HashMap::new();
 
-        let mut current_proc: Option<Procedure> = None;
-        let mut current_statements: Vec<Statement> = vec![];
+        let mut current_proc: Option<VirtualProcedure> = None;
+        let mut current_statements: Vec<VirtualStatement> = vec![];
 
         for s in statements {
             match s.payload() {
@@ -36,7 +36,7 @@ impl Program {
                         logger.error(&format!("procedure \"{}\" defined twice", name), s.pos().clone());
                     }
                     // start a new procedure
-                    current_proc = Some(Procedure::empty(name.clone(), t_in.clone(), t_out.clone(), s.pos().clone()));
+                    current_proc = Some(VirtualProcedure::empty(name.clone(), t_in.clone(), t_out.clone(), s.pos().clone()));
                 }
                 _ => {
                     match &current_proc {
@@ -63,7 +63,7 @@ impl Program {
             logger.error("no main procedure defined", FilePos::new("", 0, 0));
         }
 
-        Program { proc_table }
+        VirtualProgram { proc_table }
     }
 
     pub fn sig_table(&self) -> HashMap<String, (Vec<DType>, Vec<DType>)> {
@@ -72,33 +72,51 @@ impl Program {
         }).collect()
     }
 
-    pub fn proc_table(&self) -> &HashMap<String, Procedure> {
+    pub fn proc_table(&self) -> &HashMap<String, VirtualProcedure> {
         &self.proc_table
     }
 
-    pub fn procedures(&self) -> Values<'_, String, Procedure> {
-        self.proc_table.values()
-    }
-
-    pub fn procedures_mut(&mut self) -> ValuesMut<'_, String, Procedure> {
+    pub fn procedures_mut(&mut self) -> ValuesMut<'_, String, VirtualProcedure> {
         self.proc_table.values_mut()
     }
 
-    pub fn get_proc(&self, name: &str) -> Option<&Procedure> {
+    pub fn get_proc(&self, name: &str) -> Option<&VirtualProcedure> {
         self.proc_table.get(name)
     }
 
-    pub fn get_mut_proc(&mut self, name: &str) -> Option<&mut Procedure> {
+    pub fn get_mut_proc(&mut self, name: &str) -> Option<&mut VirtualProcedure> {
         self.proc_table.get_mut(name)
     }
 }
-
-impl Display for Program {
+impl Display for VirtualProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = "".to_string();
         for p in self.proc_table.values() {
             s.push_str(&format!("{}\n", p));
         }
         write!(f, "{}", s)
+    }
+}
+
+pub struct VRegProgram {
+    proc_table: HashMap<String, VRegProcedure>,
+}
+impl VRegProgram {
+    pub fn lower(ir_program: &VirtualProgram) -> Self {
+        let mut reg_proc_table: HashMap<String, VRegProcedure> = HashMap::new();
+        let sig_table = &ir_program.sig_table();
+        for (name, proc) in ir_program.proc_table() {
+            let reg_proc = VRegProcedure::lower(proc, sig_table);
+            reg_proc_table.insert(name.clone(), reg_proc);
+        }
+        VRegProgram { proc_table: reg_proc_table }
+    }
+}
+impl Display for VRegProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for proc in self.proc_table.values() {
+            writeln!(f, "{}", proc)?;
+        }
+        Ok(())
     }
 }

@@ -7,14 +7,17 @@ use crate::datastructures::TypeStackEntry;
 use crate::datastructures::basicblock::BasicBlock;
 use crate::datastructures::statement::DType;
 use crate::datastructures::statement::StatementPayload;
-use crate::datastructures::statement::Statement;
+use crate::datastructures::statement::VirtualStatement;
+use crate::datastructures::statement::VRegInstruction;
 use crate::datastructures::TypeStack;
 use crate::logger::Logger;
+use crate::regmachine::VReg;
+use crate::regmachine::VRegAllocator;
 use crate::util::FilePos;
 use crate::util::Positionable;
 
 #[derive(Debug)]
-pub struct Procedure {
+pub struct VirtualProcedure {
     name: String,
     types_in: Vec<DType>,
     types_out: Vec<DType>,
@@ -25,13 +28,12 @@ pub struct Procedure {
     blocks: Vec<BasicBlock>,
     // (from, to)
     block_links: Vec<Vec<bool>>,
-    statements: Vec<Statement>,
+    statements: Vec<VirtualStatement>,
     block_entry_stacks: HashMap<usize, Vec<TypeStackEntry>>,
 }
-
-impl Procedure {
+impl VirtualProcedure {
     pub fn empty(name: String, types_in: Vec<DType>, types_out: Vec<DType>, pos: FilePos) -> Self {
-        Procedure { name, types_in, types_out, pos, jump_table: HashMap::new(), blocks: vec![], block_links: vec![], statements: vec![], block_entry_stacks: HashMap::new() }
+        VirtualProcedure { name, types_in, types_out, pos, jump_table: HashMap::new(), blocks: vec![], block_links: vec![], statements: vec![], block_entry_stacks: HashMap::new() }
     }
 
     pub fn name(&self) -> &String {
@@ -42,11 +44,11 @@ impl Procedure {
         &self.blocks
     }
 
-    pub fn statements(&self) -> &[Statement] {
+    pub fn statements(&self) -> &[VirtualStatement] {
         &self.statements
     }
 
-    pub fn set_statements(&mut self, statements: Vec<Statement>) {
+    pub fn set_statements(&mut self, statements: Vec<VirtualStatement>) {
         self.statements = statements
     }
 
@@ -58,9 +60,13 @@ impl Procedure {
         &self.types_out
     }
 
-    pub fn view_block(&self, block_i: usize) -> Option<&[Statement]> {
+    pub fn view_block(&self, block_i: usize) -> Option<&[VirtualStatement]> {
         let block = self.blocks().get(block_i)?;
         Some(&self.statements()[block.start()..block.start() + block.length()])
+    }
+
+    pub fn succ_ids(&self, block_i: usize) -> Option<Vec<usize>> {
+        Some(self.block_links.get(block_i)?.iter().enumerate().filter(|(_succ_id, linked)| { **linked }).map(|(succ_id, _linked)| { succ_id }).collect())
     }
 
     pub fn build_blocks_and_jumps(&mut self, logger: &mut dyn Logger) {
@@ -248,7 +254,7 @@ logger.error("invalid jump destination", s.pos().clone());
                     // load requires a pointer and leaves its kind
                     StatementPayload::Load { kind } => {
                         pop(&mut tracking, block);
-                        tracking.push(TypeStackEntry::Known(kind.clone()));
+                        tracking.push(TypeStackEntry::Known(*kind));
                     }
                     // store requires a pointer and its kind
                     StatementPayload::Store { .. } => {
@@ -259,7 +265,7 @@ logger.error("invalid jump destination", s.pos().clone());
                     StatementPayload::Cast { to }
                     | StatementPayload::Conv { to } => {
                         pop(&mut tracking, block);
-                        tracking.push(TypeStackEntry::Known(to.clone()));
+                        tracking.push(TypeStackEntry::Known(*to));
                     }
                     // call info is in the proc table
                     StatementPayload::Call { dest } => {
@@ -269,7 +275,7 @@ logger.error("invalid jump destination", s.pos().clone());
                                 pop(&mut tracking, block);
                             }
                             for output in outputs.iter() {
-                                tracking.push(TypeStackEntry::Known(output.clone()));
+                                tracking.push(TypeStackEntry::Known(*output));
                             }
                         }
                         else {
@@ -304,7 +310,7 @@ logger.error("invalid jump destination", s.pos().clone());
         let mut visited: HashSet<usize> = HashSet::new();
         // entry stack map, preload 0th block with procedure inputs
         self.block_entry_stacks = HashMap::new();
-        self.block_entry_stacks.insert(0, self.types_in.iter().map(|t| TypeStackEntry::Known(t.clone())).collect());
+        self.block_entry_stacks.insert(0, self.types_in.iter().map(|t| TypeStackEntry::Known(*t)).collect());
 
         while !todo_ids.is_empty() {
             let current_id = todo_ids.pop_back().unwrap();
@@ -357,8 +363,9 @@ logger.error("invalid jump destination", s.pos().clone());
             
             // check types
             // simulate this block on the entry stack
+            // also set types for math ops
             let mut sim_stack = entry_stack.to_vec();
-            for s in self.statements[current.start()..current.start() + current.length()].iter() {
+            for s in self.statements[current.start()..current.start() + current.length()].iter_mut() {
                 match s.payload() {
                     // pushes only add to type stack
                     StatementPayload::Push { value } => { sim_stack.push(TypeStackEntry::Known(value.into())); }
@@ -401,6 +408,7 @@ logger.error("invalid jump destination", s.pos().clone());
                                     sim_stack.push(TypeStackEntry::Unknown);
                                 }
                                 else {
+                                    s.set_type(*a_conc);
                                     sim_stack.push(a);
                                 }
                             }
@@ -419,10 +427,13 @@ logger.error("invalid jump destination", s.pos().clone());
                     | StatementPayload::Ror
                     | StatementPayload::Not => {
                         let a = sim_stack.pop().unwrap();
-                        if matches!(a, TypeStackEntry::Unknown) {
-                            logger.error("type resolution failed", s.pos().clone());
+                        match &a {
+                            TypeStackEntry::Known(a_conc) => {
+                                s.set_type(*a_conc);
+                                sim_stack.push(a);
+                            }
+                            _ => logger.error("type resolution failed", s.pos().clone()),
                         }
-                        sim_stack.push(a);
                     },
                     // load requires a pointer and leaves its kind
                     StatementPayload::Load { kind } => {
@@ -434,7 +445,7 @@ logger.error("invalid jump destination", s.pos().clone());
                         else {
                             logger.error("type resolution failed", s.pos().clone());
                         }
-                        sim_stack.push(TypeStackEntry::Known(kind.clone()));
+                        sim_stack.push(TypeStackEntry::Known(*kind));
                     }
                     // store requires a pointer and its kind
                     // top is value, next is pointer
@@ -445,7 +456,7 @@ logger.error("invalid jump destination", s.pos().clone());
                             (TypeStackEntry::Known(val_t), TypeStackEntry::Known(p_t)) => {
                                 if val_t != *kind || !matches!(p_t, DType::Pointer) {
                                     logger.error("store requires, in order from top of stack, a value to store which must match the type declared and a pointer to store the value at", s.pos().clone());
-                                }
+                    }
                             }
                             _ => {
                                 logger.error("type resolution failed", s.pos().clone());
@@ -456,7 +467,8 @@ logger.error("invalid jump destination", s.pos().clone());
                     StatementPayload::Cast { to }
                     | StatementPayload::Conv { to } => {
                         sim_stack.pop().unwrap();
-                        sim_stack.push(TypeStackEntry::Known(to.clone()));
+                        sim_stack.push(TypeStackEntry::Known(*to));
+                        s.set_type(*to);
                     }
                     // call info is in the proc table
                     StatementPayload::Call { dest } => {
@@ -477,7 +489,7 @@ logger.error("invalid jump destination", s.pos().clone());
                             }
                             // just push the things in the output
                             for output in outputs.iter() {
-                                sim_stack.push(TypeStackEntry::Known(output.clone()));
+                                sim_stack.push(TypeStackEntry::Known(*output));
                             }
                         }
                         else {
@@ -544,8 +556,7 @@ logger.error("invalid jump destination", s.pos().clone());
         }
     }
 }
-
-impl Display for Procedure {
+impl Display for VirtualProcedure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = format!("Procedure {}\nIn: {:?}\nOut: {:?}", self.name, self.types_in, self.types_out);
         for (b_i, block) in self.blocks.iter().enumerate() {
@@ -563,5 +574,331 @@ impl Display for Procedure {
             }
         }
         write!(f, "{}", s)
+    }
+}
+
+pub struct VRegProcedure {
+    name: String,
+    inputs: Vec<VReg>,
+    outputs: Vec<VReg>,
+    instructions: Vec<VRegInstruction>
+}
+impl VRegProcedure {
+    pub fn lower(ir_proc: &VirtualProcedure, sig_table: &HashMap<String, (Vec<DType>, Vec<DType>)>) -> Self {
+        // procedures are lowered block by block
+        // block input and output registers are propagated in call order
+        // because the language uses implicit fallthroughs and we don't insert jump instructions
+        // for the implicit fallthroughs, we have to emit blocks in source order
+        let mut allocator = VRegAllocator::new();
+
+        // allocate registers for outputs and inputs
+        let proc_inputs: Vec<VReg> = ir_proc.types_in().iter().map(
+            |slot| allocator.fresh(*slot)
+        ).collect();
+        let proc_outputs: Vec<VReg> = ir_proc.types_out().iter().map(
+            |slot| allocator.fresh(*slot)
+        ).collect();
+
+        // register entry stack map, preload 0th block with procedure inputs
+        let mut reg_stacks: HashMap<usize, Vec<VReg>> = HashMap::new();
+        reg_stacks.insert(0, proc_inputs.to_vec());
+        let mut todo_ids: VecDeque<usize> = [0].into();
+        let mut visited: HashSet<usize> = HashSet::new();
+        let mut block_instrs: HashMap<usize, Vec<VRegInstruction>> = HashMap::new();
+
+        while !todo_ids.is_empty() {
+            let current_id = todo_ids.pop_back().unwrap();
+            if visited.contains(&current_id) {
+                continue;
+            }
+            visited.insert(current_id);
+            
+            let mut instructions = vec![];
+
+            // get your entry stack
+            // we clone here because we're going to simulate on it, we don't want to change how it
+            // looks in the table
+            let mut reg_stack = reg_stacks.get(&current_id).unwrap().clone();
+            // simulate on the entry stack
+            // allocate new registers if you need to
+            for s in ir_proc.view_block(current_id).unwrap() {
+                match s.payload() {
+                    StatementPayload::Push { value } => {
+                        let dest = allocator.fresh(value.into());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::LoadImm { dest, val: value.clone() });
+                    }
+                    StatementPayload::Pop => {
+                        reg_stack.pop();
+                    }
+                    StatementPayload::Dup => {
+                        let src = *reg_stack.last().unwrap();
+                        reg_stack.push(src);
+                    }
+                    StatementPayload::Swap => {
+                        let a = reg_stack.pop().unwrap();
+                        let b = reg_stack.pop().unwrap();
+                        reg_stack.push(a);
+                        reg_stack.push(b);
+                    }
+                    // with two-input ops we need to be careful about arg order
+                    // remember we want push 1 push 2 sub to be 1 - 2, not 2 - 1
+                    // the first thing we pop must be the second argument
+                    StatementPayload::Add => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Add { dest, a, b });
+                    }
+                    StatementPayload::Sub => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Sub { dest, a, b });
+                    }
+                    StatementPayload::Mult => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Mul { dest, a, b });
+                    }
+                    StatementPayload::Div => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Div { dest, a, b });
+                    }
+                    StatementPayload::Mod => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Mod { dest, a, b });
+                    }
+                    StatementPayload::And => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::And { dest, a, b });
+                    }
+                    StatementPayload::Or => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Or { dest, a, b });
+                    }
+                    StatementPayload::Xor => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Xor { dest, a, b });
+                    }
+                    StatementPayload::Eq => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Eq { dest, a, b });
+                    }
+                    StatementPayload::Neq => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Neq { dest, a, b });
+                    }
+                    StatementPayload::Lt => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Lt { dest, a, b });
+                    }
+                    StatementPayload::Leq => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Leq { dest, a, b });
+                    }
+                    StatementPayload::Gt => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Gt { dest, a, b });
+                    }
+                    StatementPayload::Geq => {
+                        let b = reg_stack.pop().unwrap();
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Geq { dest, a, b });
+                    }
+                    StatementPayload::Inc => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Inc { dest, a });
+                    }
+                    StatementPayload::Dec => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Dec { dest, a });
+                    }
+                    StatementPayload::Bsl => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Bsl { dest, a });
+                    }
+                    StatementPayload::Bsr => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Bsr { dest, a });
+                    }
+                    StatementPayload::Rol => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Rol { dest, a });
+                    }
+                    StatementPayload::Ror => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Ror { dest, a });
+                    }
+                    StatementPayload::Not => {
+                        let a = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*a.holds());
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Not { dest, a });
+                    }
+                    StatementPayload::Load { kind } => {
+                        let addr = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*kind);
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::LoadMem { dest, addr });
+                    }
+                    StatementPayload::Store { kind: _ } => {
+                        let src = reg_stack.pop().unwrap();
+                        let addr = reg_stack.pop().unwrap();
+                        instructions.push(VRegInstruction::Store { addr, src });
+                    }
+                    StatementPayload::Cast { to } => {
+                        let src = reg_stack.pop().unwrap();
+                        let dest = allocator.fresh(*to);
+                        reg_stack.push(dest);
+                        instructions.push(VRegInstruction::Cast { dest, src, to: *to });
+                    }
+                    StatementPayload::Conv { to } => {
+                        reg_stack.last_mut().unwrap().change_type(*to);
+                    }
+                    StatementPayload::Call { dest } => {
+                        // get call info from the table
+                        let (inputs, outputs) = sig_table.get(dest).unwrap();
+                        // pop the input registers from the stack
+                        let mut input_regs: Vec<VReg> = vec![];
+                        for _ in inputs.iter() {
+                            input_regs.push(reg_stack.pop().unwrap());
+                        }
+                        input_regs.reverse();
+                        // allocate output registers to the stack
+                        let mut output_regs: Vec<VReg> = vec![];
+                        for output in outputs.iter() {
+                            let or = allocator.fresh(*output);
+                            reg_stack.push(or);
+                            output_regs.push(or);
+                        }
+                        // emit the call
+                        instructions.push(VRegInstruction::Call { dest: dest.clone(), inputs: input_regs, outputs: output_regs });
+                    }
+                    StatementPayload::Jumpif { dest } => {
+                        let cmp = reg_stack.pop().unwrap();
+                        instructions.push(VRegInstruction::Jumpif { dest: dest.clone(), cmp });
+                    }
+                    StatementPayload::Jump { dest } => {
+                        instructions.push(VRegInstruction::Jump { dest: dest.clone() });
+                    }
+                    StatementPayload::Label { name } => {
+                        instructions.push(VRegInstruction::Label { name: name.clone() });
+                    }
+                    StatementPayload::Ret => {
+                        // move things into the return registers
+                        for (slot, from) in proc_outputs.iter().rev().zip(reg_stack.iter().rev()) {
+                            instructions.push(VRegInstruction::Move { dest: *slot, src: *from });
+                        }
+                        // then return from the stack
+                        instructions.push(VRegInstruction::Ret);
+                    }
+                    _ => unimplemented!()
+                };
+            }
+
+            // reconcile with successive blocks
+            for succ_id in ir_proc.succ_ids(current_id).unwrap().iter() {
+                // if the next block already has an entry stack allocated, move the values on your
+                // stack into their stack
+                // order doesn't matter because stacks are the same (guaranteed by typechecking
+                // pass)
+                if let Some(succ_regs) = reg_stacks.get(succ_id) {
+                    assert_eq!(reg_stack.len(), succ_regs.len());
+                    for (mine, theirs) in reg_stack.iter().zip(succ_regs.iter()) {
+                        assert_eq!(mine.holds(), theirs.holds());
+                        instructions.push(VRegInstruction::Move { dest: *theirs, src: *mine });
+                    }
+                }
+                // otherwise just set their entry stack to your exit stack (no need to move or allocate new
+                // registers or anything)
+                else {
+                    reg_stacks.insert(*succ_id, reg_stack.clone());
+                }
+                todo_ids.push_back(*succ_id);
+            }
+            
+            // save your instructions
+            block_instrs.insert(current_id, instructions);
+        }
+
+        // now we have to emit instructions in source order
+        let mut instructions = vec![];
+        // block ids in ascending order is source order
+        for block_id in 0..ir_proc.blocks().len() {
+            if let Some(instrs) = block_instrs.remove(&block_id) {
+                instructions.extend(instrs);
+            }
+            else {
+                panic!()
+            }
+        }
+
+        VRegProcedure { name: ir_proc.name().clone(), inputs: proc_inputs, outputs: proc_outputs, instructions }
+    }
+}
+impl Display for VRegProcedure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        write!(f, "\n  input registers:")?;
+        for ir in self.inputs.iter() {
+            write!(f, " {}", ir)?;
+        }
+        write!(f, "\n  output registers:")?;
+        for ir in self.outputs.iter() {
+            write!(f, " {}", ir)?;
+        }
+        for i in self.instructions.iter() {
+            write!(f, "\n  {:?}", i)?;
+        }
+        Ok(())
     }
 }

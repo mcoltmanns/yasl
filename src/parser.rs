@@ -5,7 +5,7 @@
 // does not do typechecking
 // does not build any symbol tables
 use std::collections::HashMap;
-use crate::datastructures::statement::{DType, Literal, Statement, StatementPayload};
+use crate::datastructures::statement::{DType, Literal, VirtualStatement, StatementPayload};
 use crate::datastructures::token::{Token, TokenPayload};
 use crate::logger::Logger;
 use crate::util::Positionable;
@@ -13,7 +13,7 @@ use crate::util::Positionable;
 pub struct Parser{
     tokens: std::iter::Peekable<std::vec::IntoIter<Token>>,
     constants: HashMap<String, Literal>,
-    statements: Vec<Statement>
+    statements: Vec<VirtualStatement>
 }
 
 impl Parser {
@@ -21,7 +21,7 @@ impl Parser {
         Parser { tokens: tokens.into_iter().peekable(), constants: HashMap::new(), statements: Vec::new() }
     }
 
-    pub fn statements(&self) -> &Vec<Statement> {
+    pub fn statements(&self) -> &Vec<VirtualStatement> {
         &self.statements
     }
 
@@ -58,31 +58,31 @@ impl Parser {
         // all statements start with a control word, so check what that is
         match t.payload() {
             // implicit args are one word, and can be parsed directly
-            TokenPayload::Pop => self.statements.push(Statement::new(StatementPayload::Pop, t.pos().clone())),
-            TokenPayload::Dup => self.statements.push(Statement::new(StatementPayload::Dup, t.pos().clone())),
-            TokenPayload::Swap => self.statements.push(Statement::new(StatementPayload::Swap, t.pos().clone())),
-            TokenPayload::Add => self.statements.push(Statement::new(StatementPayload::Add, t.pos().clone())),
-            TokenPayload::Sub => self.statements.push(Statement::new(StatementPayload::Sub, t.pos().clone())),
-            TokenPayload::Div => self.statements.push(Statement::new(StatementPayload::Div, t.pos().clone())),
-            TokenPayload::Mult => self.statements.push(Statement::new(StatementPayload::Mult, t.pos().clone())),
-            TokenPayload::Mod => self.statements.push(Statement::new(StatementPayload::Mod, t.pos().clone())),
-            TokenPayload::Inc => self.statements.push(Statement::new(StatementPayload::Inc, t.pos().clone())),
-            TokenPayload::Dec => self.statements.push(Statement::new(StatementPayload::Dec, t.pos().clone())),
-            TokenPayload::And => self.statements.push(Statement::new(StatementPayload::And, t.pos().clone())),
-            TokenPayload::Or => self.statements.push(Statement::new(StatementPayload::Or, t.pos().clone())),
-            TokenPayload::Not => self.statements.push(Statement::new(StatementPayload::Not, t.pos().clone())),
-            TokenPayload::Xor => self.statements.push(Statement::new(StatementPayload::Xor, t.pos().clone())),
-            TokenPayload::Bsl => self.statements.push(Statement::new(StatementPayload::Bsl, t.pos().clone())),
-            TokenPayload::Bsr => self.statements.push(Statement::new(StatementPayload::Bsr, t.pos().clone())),
-            TokenPayload::Rol => self.statements.push(Statement::new(StatementPayload::Rol, t.pos().clone())),
-            TokenPayload::Ror => self.statements.push(Statement::new(StatementPayload::Ror, t.pos().clone())),
-            TokenPayload::Eq => self.statements.push(Statement::new(StatementPayload::Eq, t.pos().clone())),
-            TokenPayload::Neq => self.statements.push(Statement::new(StatementPayload::Neq, t.pos().clone())),
-            TokenPayload::Lt => self.statements.push(Statement::new(StatementPayload::Lt, t.pos().clone())),
-            TokenPayload::Gt => self.statements.push(Statement::new(StatementPayload::Gt, t.pos().clone())),
-            TokenPayload::Leq => self.statements.push(Statement::new(StatementPayload::Leq, t.pos().clone())),
-            TokenPayload::Geq => self.statements.push(Statement::new(StatementPayload::Geq, t.pos().clone())),
-            TokenPayload::Ret => self.statements.push(Statement::new(StatementPayload::Ret, t.pos().clone())),
+            TokenPayload::Pop => self.statements.push(VirtualStatement::new(StatementPayload::Pop, t.pos().clone())),
+            TokenPayload::Dup => self.statements.push(VirtualStatement::new(StatementPayload::Dup, t.pos().clone())),
+            TokenPayload::Swap => self.statements.push(VirtualStatement::new(StatementPayload::Swap, t.pos().clone())),
+            TokenPayload::Add => self.statements.push(VirtualStatement::new(StatementPayload::Add, t.pos().clone())),
+            TokenPayload::Sub => self.statements.push(VirtualStatement::new(StatementPayload::Sub, t.pos().clone())),
+            TokenPayload::Div => self.statements.push(VirtualStatement::new(StatementPayload::Div, t.pos().clone())),
+            TokenPayload::Mult => self.statements.push(VirtualStatement::new(StatementPayload::Mult, t.pos().clone())),
+            TokenPayload::Mod => self.statements.push(VirtualStatement::new(StatementPayload::Mod, t.pos().clone())),
+            TokenPayload::Inc => self.statements.push(VirtualStatement::new(StatementPayload::Inc, t.pos().clone())),
+            TokenPayload::Dec => self.statements.push(VirtualStatement::new(StatementPayload::Dec, t.pos().clone())),
+            TokenPayload::And => self.statements.push(VirtualStatement::new(StatementPayload::And, t.pos().clone())),
+            TokenPayload::Or => self.statements.push(VirtualStatement::new(StatementPayload::Or, t.pos().clone())),
+            TokenPayload::Not => self.statements.push(VirtualStatement::new(StatementPayload::Not, t.pos().clone())),
+            TokenPayload::Xor => self.statements.push(VirtualStatement::new(StatementPayload::Xor, t.pos().clone())),
+            TokenPayload::Bsl => self.statements.push(VirtualStatement::new(StatementPayload::Bsl, t.pos().clone())),
+            TokenPayload::Bsr => self.statements.push(VirtualStatement::new(StatementPayload::Bsr, t.pos().clone())),
+            TokenPayload::Rol => self.statements.push(VirtualStatement::new(StatementPayload::Rol, t.pos().clone())),
+            TokenPayload::Ror => self.statements.push(VirtualStatement::new(StatementPayload::Ror, t.pos().clone())),
+            TokenPayload::Eq => self.statements.push(VirtualStatement::new(StatementPayload::Eq, t.pos().clone())),
+            TokenPayload::Neq => self.statements.push(VirtualStatement::new(StatementPayload::Neq, t.pos().clone())),
+            TokenPayload::Lt => self.statements.push(VirtualStatement::new(StatementPayload::Lt, t.pos().clone())),
+            TokenPayload::Gt => self.statements.push(VirtualStatement::new(StatementPayload::Gt, t.pos().clone())),
+            TokenPayload::Leq => self.statements.push(VirtualStatement::new(StatementPayload::Leq, t.pos().clone())),
+            TokenPayload::Geq => self.statements.push(VirtualStatement::new(StatementPayload::Geq, t.pos().clone())),
+            TokenPayload::Ret => self.statements.push(VirtualStatement::new(StatementPayload::Ret, t.pos().clone())),
 
             TokenPayload::Trap => { 
                 unimplemented!()
@@ -127,7 +127,7 @@ impl Parser {
                     TokenPayload::Name(s) => { 
                         match self.constants.get(s) {
                             Some(value) => {
-                                self.statements.push(Statement::new(StatementPayload::Push { value: value.clone() }, t.pos().clone()));
+                                self.statements.push(VirtualStatement::new(StatementPayload::Push { value: value.clone() }, t.pos().clone()));
                             }
                             None => {
                                 logger.error(&format!("constant \"{}\" was not defined", s), t.pos().clone() );
@@ -151,7 +151,7 @@ impl Parser {
                                         logger.error(&s, val_t.pos().clone());
                                     }
                                     Ok(literal) => {
-                                        self.statements.push(Statement::new(StatementPayload::Push { value: literal }, t.pos().clone()));
+                                        self.statements.push(VirtualStatement::new(StatementPayload::Push { value: literal }, t.pos().clone()));
                                     }
                                 }
                             }
@@ -167,7 +167,7 @@ impl Parser {
                         logger.error(&s, type_t.pos().clone());
                     }
                     Ok(to) => {
-                        self.statements.push(Statement::new(StatementPayload::Load { kind: to }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Load { kind: to }, t.pos().clone()));
                     }
                 }
             }
@@ -179,7 +179,7 @@ impl Parser {
                         logger.error(&s, type_t.pos().clone());
                     }
                     Ok(to) => {
-                        self.statements.push(Statement::new(StatementPayload::Store { kind: to }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Store { kind: to }, t.pos().clone()));
                     }
                 }
             }
@@ -188,7 +188,7 @@ impl Parser {
                 let name_t = self.tokens.next().unwrap();
                 match name_t.payload() {
                     TokenPayload::Name(s) => {
-                        self.statements.push(Statement::new(StatementPayload::Label { name: s.clone() }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Label { name: s.clone() }, t.pos().clone()));
                     }
                     _ => {
                         logger.error("expected name after label", name_t.pos().clone());
@@ -200,7 +200,7 @@ impl Parser {
                 let dest_t = self.tokens.next().unwrap();
                 match dest_t.payload() {
                     TokenPayload::Name(s) => {
-                        self.statements.push(Statement::new(StatementPayload::Jump { dest: s.clone() }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Jump { dest: s.clone() }, t.pos().clone()));
                     }
                     _ => {
                         logger.error("expected label after jump", dest_t.pos().clone());
@@ -212,7 +212,7 @@ impl Parser {
                 let dest_t = self.tokens.next().unwrap();
                 match dest_t.payload() {
                     TokenPayload::Name(s) => {
-                        self.statements.push(Statement::new(StatementPayload::Jumpif { dest: s.clone() }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Jumpif { dest: s.clone() }, t.pos().clone()));
                     }
                     _ => {
                         logger.error("expected label after jump", dest_t.pos().clone());
@@ -231,7 +231,7 @@ impl Parser {
                         self.expect(TokenPayload::Def, logger);
                         match (ins, outs) {
                             (Ok(ins_ok), Ok(outs_ok)) => {
-                                self.statements.push(Statement::new(StatementPayload::Proc { name: s.clone(), t_in: ins_ok, t_out: outs_ok }, t.pos().clone()));
+                                self.statements.push(VirtualStatement::new(StatementPayload::Proc { name: s.clone(), t_in: ins_ok, t_out: outs_ok }, t.pos().clone()));
                             }
                             (Err(err), _) | (_, Err(err))=> {
                                 logger.error(&err, t.pos().clone());
@@ -248,7 +248,7 @@ impl Parser {
                 let t = self.tokens.next().unwrap();
                 match t.payload() {
                     TokenPayload::Name(s) => {
-                        self.statements.push(Statement::new(StatementPayload::Call { dest: s.to_string() }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Call { dest: s.to_string() }, t.pos().clone()));
                     }
                     _ => {
                         logger.error("expected label after call", t.pos().clone());
@@ -263,7 +263,7 @@ impl Parser {
                         logger.error(&s, t.pos().clone());
                     }
                     Ok(to) => {
-                        self.statements.push(Statement::new(StatementPayload::Cast { to }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Cast { to }, t.pos().clone()));
                     }
                 }
             }
@@ -275,7 +275,7 @@ impl Parser {
                         logger.error(&s, t.pos().clone());
                     }
                     Ok(to) => {
-                        self.statements.push(Statement::new(StatementPayload::Conv { to }, t.pos().clone()));
+                        self.statements.push(VirtualStatement::new(StatementPayload::Conv { to }, t.pos().clone()));
                     }
                 }
             }

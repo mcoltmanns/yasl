@@ -1,4 +1,5 @@
-use yasl::datastructures::program::Program;
+use yasl::datastructures::program::VRegProgram;
+use yasl::datastructures::program::VirtualProgram;
 use yasl::logger;
 use yasl::logger::Logger;
 use yasl::tokenizer;
@@ -17,7 +18,7 @@ fn main() {
     let src_string = match fs::read_to_string(src_path) {
         Ok(s) => s,
         Err(err) => {
-            println!("unable to open file \"{}\": {}", src_path.to_str().unwrap(), err);
+            println!("unable to open file \"{}\": {}\ncompilation failed", src_path.to_str().unwrap(), err);
             return;
         }
     };
@@ -37,7 +38,7 @@ fn main() {
     }
 
     // build the procedure table and derive a signature table from it
-    let mut ir_program = Program::new(parser.statements(), &mut logger);
+    let mut ir_program = VirtualProgram::new(parser.statements(), &mut logger);
     let sig_table = ir_program.sig_table();
 
     // for every procedure, link the blocks and build the jump table
@@ -57,23 +58,11 @@ fn main() {
     }
     println!("{}", ir_program);
 
-    //// so now we know the program is correct (at least as correct as we can know it to be)
-    //// it's time to think about code generation
-    //// the general pipeline is:
-    //// source -> typed ir -> virtual register ir --(register allocation)-> real register ir
-    //// --(instruction selection)-> assembly
-    //
-    //// lowering to virtual register IR
-    //// each place on the stack becomes a virtual register name
-    //// i mean each!
-    //// you have infinite virtual registers
-    /*let reg_proc_table = convert_proc_table(&procedure_table, &mut logger);
-    for rp in reg_proc_table.values() {
-        println!("{}", rp.name);
-        println!("input registers: {:?}", rp.inputs);
-        println!("output registers: {:?}", rp.outputs);
-        for i in &rp.instructions {
-            println!("  {:?}", i);
-        }
-    }*/
+    // now the program is correct
+    // next step is to lower to a virtual register/virtual instruction ir
+    // here we can already emit typed math instructions
+    // but stick to infinite registers for now
+    // register allocation depends on the target
+    let vreg_program = VRegProgram::lower(&ir_program);
+    println!("{}", vreg_program);
 }

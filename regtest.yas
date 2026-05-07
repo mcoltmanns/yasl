@@ -1,114 +1,24 @@
-proc arith_chain in i32 out i32 def
-    push i32 2
-    mult
-    push i32 3
-    add
-    push i32 1
-    sub
-    ret
-
+// test 3: multiple outputs correctly ordered
+// if output register ordering is wrong,
+// the caller will see swapped values
+// split returns (n, n*2) -- n*2 on top per convention
+// caller adds them: should get n + n*2 = 3n
 proc split in i32 out i32 i32 def
     dup
     push i32 2
     mult
     ret
 
-proc use_split in out def
-    push i32 5
+proc use_split in i32 out i32 def
     call split
+    // stack should be: [n, n*2] with n*2 on top
+    // add should give n + n*2 = 3n
     add
-    pop
-    ret
-
-proc double in i32 out i32 def
-    dup
-    add
-    ret
-
-proc quad in i32 out i32 def
-    call double
-    call double
-    ret
-
-proc bitwise_test in i32 out i32 def
-    push i32 255
-    and
-    bsl
-    bsl
-    push i32 1
-    or
-    ret
-
-proc abs in i32 out i32 def
-    dup
-    push i32 0
-    lt
-    jumpif abs_negative
-    ret
-    label abs_negative
-    push i32 -1
-    mult
-    ret
-
-proc type_change in i32 out f32 def
-    conv f32
-    push f32 2.0
-    mult
-    ret
-
-proc stack_manip in i32 i32 i32 out i32 def
-    swap
-    pop
-    add
-    ret
-
-proc sum3 in i32 i32 i32 out i32 def
-    add
-    add
-    ret
-
-proc call_sum3 in out def
-    push i32 1
-    push i32 2
-    push i32 3
-    call sum3
-    pop
-    ret
-
-proc mem_test in ptr out i32 def
-    dup
-    push i32 42
-    store i32
-    load i32
-    ret
-
-proc mem_i8 in ptr out i8 def
-    dup
-    push i8 5
-    store i8
-    load i8
     ret
 
 proc main in out def
-    push i32 10
-    call arith_chain
-    pop
+    push i32 5
     call use_split
-    push i32 3
-    call quad
+    // result should be 15
     pop
-    push i32 10
-    call abs
-    pop
-    push i32 1
-    push i32 2
-    push i32 3
-    call stack_manip
-    pop
-    push i32 1
-    push i32 2
-    push i32 3
-    call sum3
-    pop
-    call call_sum3
     ret
