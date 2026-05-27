@@ -131,6 +131,24 @@ impl Literal {
             }
         }
     }
+
+    // return the value in this literal as a vector of bytes in little-endian order
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::U8(v) => v.to_le_bytes().to_vec(),
+            Self::U16(v) => v.to_le_bytes().to_vec(),
+            Self::U32(v) => v.to_le_bytes().to_vec(),
+            Self::U64(v) => v.to_le_bytes().to_vec(),
+            Self::I8(v) => v.to_le_bytes().to_vec(),
+            Self::I16(v) => v.to_le_bytes().to_vec(),
+            Self::I32(v) => v.to_le_bytes().to_vec(),
+            Self::I64(v) => v.to_le_bytes().to_vec(),
+            Self::F16(v) => v.to_le_bytes().to_vec(),
+            Self::F32(v) => v.to_le_bytes().to_vec(),
+            Self::F64(v) => v.to_le_bytes().to_vec(),
+            Self::Pointer(v) => v.to_le_bytes().to_vec()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

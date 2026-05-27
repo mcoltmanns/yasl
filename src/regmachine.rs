@@ -3,10 +3,11 @@
 // it emits VirtualInstructions
 
 use std::fmt::Display;
+use std::hash::Hash;
 
 use crate::datastructures::statement::DType;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq)]
 pub struct VReg {
     id: usize,
     holds: DType,
@@ -31,6 +32,16 @@ impl VReg {
 impl Display for VReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "r{}({:?})", self.id, self.holds)
+    }
+}
+impl PartialEq for VReg {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Hash for VReg {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
     }
 }
 

@@ -1,0 +1,23 @@
+proc main in out def
+    push i16 1
+    push i8 2
+    push i32 3
+    call test
+    pop
+    pop
+    ret
+
+proc test in i16 i8 i32 out i16 i8 def
+    jumpif end
+    label middle
+    conv i16
+    add
+    jump real_end
+    label end
+    jump middle
+    label real_end
+    push i8 90
+    cast i16
+    add
+    push i8 1
+    ret

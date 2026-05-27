@@ -1,0 +1,21 @@
+proc buried_live in i8 out i8 def
+    dup                 // stack: n n -- second n sits buried
+    label bury_loop
+    // stack: n counter
+    // only touch counter, n sits buried
+    dup
+    push i8 0
+    eq
+    jumpif bury_done
+    dec
+    jump bury_loop
+    label bury_done
+    pop                 // discard counter (which is 0)
+    // return buried n
+    ret
+
+proc main in out def
+    push i8 5
+    call buried_live
+    pop
+    ret

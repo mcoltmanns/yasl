@@ -14,6 +14,7 @@ use crate::datastructures::TypeStack;
 use crate::logger::Logger;
 use crate::regmachine::VReg;
 use crate::regmachine::VRegAllocator;
+use crate::target::Target;
 use crate::util::FilePos;
 use crate::util::Positionable;
 
@@ -515,6 +516,12 @@ logger.error("invalid jump destination", s.pos().clone());
                     }
                     // ret requires as many things as the procedure declares
                     StatementPayload::Ret => {
+                        if sim_stack.len() > self.types_out.len() {
+                            logger.error(&format!("stack overflow (got {}, expected {})", sim_stack.len(), self.types_out.len()), s.pos().clone());
+                        }
+                        else if sim_stack.len() < self.types_out.len() {
+                            logger.error(&format!("stack underflow (got {}, expected {})", sim_stack.len(), self.types_out.len()), s.pos().clone());
+                        }
                         for expect in self.types_out.iter().rev() {
                             let actual = sim_stack.pop().unwrap();
                             match actual {
@@ -578,7 +585,7 @@ impl Display for VirtualProcedure {
     }
 }
 
-pub struct LiveInterval {
+pub struct LiveRange {
     // the register this interval affects
     register: VReg,
     // the instruction in the procedure where this interval starts
@@ -586,28 +593,60 @@ pub struct LiveInterval {
     // how long the interval goes for
     length: usize,
 }
-impl LiveInterval {
+impl LiveRange {
     pub fn new(register: VReg, start: usize, length: usize) -> Self {
         assert_ne!(length, 0);
-        LiveInterval { register, start, length }
+        LiveRange { register, start, length }
     }
 
-    pub fn overlaps(&self, other: &LiveInterval) -> bool {
+    pub fn overlaps(&self, other: &LiveRange) -> bool {
         let self_end = self.start + self.length - 1;
         let other_end = other.start + other.length - 1;
         self.start <= other_end && other.start <= self_end
     }
-}
 
+    pub fn register(&self) -> &VReg {
+        &self.register
+    }
+
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    pub fn length(&self) -> usize {
+        self.length
+    }
+}
 
 pub struct VRegProcedure {
     name: String,
     inputs: Vec<VReg>,
     outputs: Vec<VReg>,
     instructions: Vec<VRegInstruction>,
-    live_ranges: HashMap<usize, LiveInterval>,
+    // map registers to their ranges
+    live_ranges: HashMap<usize, LiveRange>,
 }
 impl VRegProcedure {
+    pub fn instructions(&self) -> &[VRegInstruction] {
+        &self.instructions
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn inputs(&self) -> &[VReg] {
+        &self.inputs
+    }
+
+    pub fn outputs(&self) -> &[VReg] {
+        &self.outputs
+    }
+
+    pub fn live_ranges(&self) -> Vec<&LiveRange> {
+        self.live_ranges.values().collect()
+    }
+
     pub fn lower(ir_proc: &VirtualProcedure, sig_table: &HashMap<String, (Vec<DType>, Vec<DType>)>) -> Self {
         // procedures are lowered block by block
         // block input and output registers are propagated in call order
@@ -615,14 +654,31 @@ impl VRegProcedure {
         // for the implicit fallthroughs, we have to emit blocks in source order
         // here we also track live ranges of virtual registers
         let mut allocator = VRegAllocator::new();
-        let mut ranges: HashMap<usize, LiveInterval> = HashMap::new();
+        let mut ranges: HashMap<usize, LiveRange> = HashMap::new();
 
-        fn update_live_range(range_map: &mut HashMap<usize, LiveInterval>, reg: VReg, statement_index: usize) {
+        fn update_live_range(range_map: &mut HashMap<usize, LiveRange>, reg: VReg, statement_index: usize) {
+            /* it's worth giving some thought to this algorithm
+             * what happens in loop back edges?
+             * when we allocate registers, we simulate a virtual stack, like how we did
+             * typechecking
+             * registers which will be needed at a later point are kept on the stack, registers
+             * which we're done with are dropped
+             * what happens if a register is modified inside a loop, but that value is used again
+             * earlier in the loop (after the back edge)?
+             * registers which survive multiple iterations of a loop but are used in the loop are
+             * guaranteed to be copied out of and then back into by virtue of the reconciliation
+             * moves and the shape of the virtual instructions (never overwrite)
+             * registers which are only used in one iteration of a loop are only live within the
+             * loop anyway
+             *
+             * if the virtual instructions allowed in-place register modification then we would
+             * need a more complex algorithm
+             */
             if let Some(range) = range_map.get_mut(&reg.id()) {
                 range.length = 1 + statement_index - range.start;
             }
             else {
-                range_map.insert(reg.id(), LiveInterval::new(reg, statement_index, 1));
+                range_map.insert(reg.id(), LiveRange::new(reg, statement_index, 1));
             }
         }
 
@@ -905,7 +961,8 @@ impl VRegProcedure {
                     assert_eq!(reg_stack.len(), succ_regs.len());
                     for (mine, theirs) in reg_stack.iter().zip(succ_regs.iter()) {
                         assert_eq!(mine.holds(), theirs.holds());
-                        // only move if the registers are different
+                        // only move if the registers are different - if the registers are the same
+                        // they must hold the same value
                         if mine.id() != theirs.id() {
                             instructions.push(VRegInstruction::Move { dest: *theirs, src: *mine });
                         }
@@ -957,8 +1014,8 @@ impl Display for VRegProcedure {
         for ir in self.outputs.iter() {
             write!(f, " {}", ir)?;
         }
-        for i in self.instructions.iter() {
-            write!(f, "\n  {:?}", i)?;
+        for (ii, i) in self.instructions.iter().enumerate() {
+            write!(f, "\n    {}: {:?}", ii, i)?;
         }
         write!(f, "\n  live ranges:")?;
         for (_, range) in self.live_ranges.iter() {

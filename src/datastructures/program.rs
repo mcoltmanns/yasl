@@ -111,6 +111,10 @@ impl VRegProgram {
         }
         VRegProgram { proc_table: reg_proc_table }
     }
+
+    pub fn proc_table(&self) -> &HashMap<String, VRegProcedure> {
+        &self.proc_table
+    }
 }
 impl Display for VRegProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
