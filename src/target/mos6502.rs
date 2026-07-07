@@ -1,13 +1,15 @@
-use crate::target::VReg;
-use std::collections::HashMap;
+mod codegen;
+
+use std::iter::zip;
+use std::slice::SliceIndex;
 use crate::datastructures::statement::VRegInstruction;
-use crate::target::DType;
+use crate::target::{lin_alloc, DType};
 use crate::target::Target;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MOS6502Location {
     RegisterPool(u8),
-    FrameSpill(u16),
+    FrameSpill(u8),
 }
 
 /// first three letters are opcode
@@ -274,18 +276,18 @@ impl MOS6502Instruction {
             MOS6502Instruction::SED => vec![0xf8],
             MOS6502Instruction::ORA(arg) => vec![0x09, *arg],
             MOS6502Instruction::ORAAY(arg) => vec![0x19, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
-            MOS6502Instruction::AND(arg) => vec![0x29, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
+            MOS6502Instruction::AND(arg) => vec![0x29, arg.to_le_bytes()[0]],
             MOS6502Instruction::ANDAY(arg) => vec![0x39, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
-            MOS6502Instruction::EOR(arg) => vec![0x49, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
+            MOS6502Instruction::EOR(arg) => vec![0x49, arg.to_le_bytes()[0]],
             MOS6502Instruction::EORAY(arg) => vec![0x59, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
-            MOS6502Instruction::ADC(arg) => vec![0x69, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
+            MOS6502Instruction::ADC(arg) => vec![0x69, arg.to_le_bytes()[0]],
             MOS6502Instruction::ADCAY(arg) => vec![0x79, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
             MOS6502Instruction::STAAY(arg) => vec![0x99, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
             MOS6502Instruction::LDA(arg) => vec![0xa9, *arg],
             MOS6502Instruction::LDAAY(arg) => vec![0xb9, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
             MOS6502Instruction::CMP(arg) => vec![0xc9, *arg],
             MOS6502Instruction::CMPAY(arg) => vec![0xd9, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
-            MOS6502Instruction::SBC(arg) => vec![0xe9, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
+            MOS6502Instruction::SBC(arg) => vec![0xe9, *arg],
             MOS6502Instruction::SBCAY(arg) => vec![0xf9, arg.to_le_bytes()[0], arg.to_le_bytes()[1]],
             MOS6502Instruction::ASL => vec![0x0a],
             MOS6502Instruction::ROL => vec![0x2a],
@@ -341,19 +343,31 @@ impl MOS6502Instruction {
 }
 
 pub struct MOS6502Target {
+    // everything is little-endian
     // $0000-$00FF is zero page, fast access
-    // $0100-$01FF is hardware stack, reserved for the processor's call/return stack
+    // $0100-$01FF is hardware stack, reserved for the processor's call/return stack (strictly
+    // addresses)
     // $FFFA-$FFFF are interrupt and reset vectors, also reserved
     //
-    // the first 64 bytes ($0000-$0039) are the zero page register pool
+    // the first 64 bytes ($0000-$0039) are the zero page register pool (used by the compiler during register allocation)
     // $0040-$0041 is DFP (data frame pointer)
-    // $0042-$0043 is IND (indirect load pointer)
-    // $0044-$004A is SCR0 (64 bit math scratch)
-    // $004B-$0052 is SCR1 (64 bit math scratch)
-    // $0000-$0052 are all compiler reserved
-    // $0053-$00ff is free zero page
+    // $0042-$0052 are floating point scratch
+    // it's much easier (at little spatial cost) to work on floats when their components are byte-aligned
+    // all of these float sections have enough space for the components of an up to 64 bit float
+    // also all of the mantissa registers have enough room to be used as 64-bit math accumulators if need be
+    // $0042 is SIG0 (sign 0)
+    // $0043-$0044 is EXP0 (exponent 0)
+    // $0045-$004c is MAN0 (mantissa 0)
+    // $004d is SIG1 (sign 1)
+    // $004e-$004f is EXP1 (exponent 1)
+    // $0050-$0057 is MAN1 (mantissa 1)
+    // $0058 is SIG2
+    // $0059-$0060 is EXP2
+    // $0061-$0068 is MAN2
+    // $0000-$0068 are all compiler reserved
+    // $0069-$00ff is free zero page (for the user)
     // $0100-$01ff is the hardware stack
-    // $0200-$05ff is the data frame stack (grows down)
+    // $0200-$05ff is the data frame stack (grows down, holds arguments and spills)
     //
     // tying in with hardware specs:
     // $0000-$5fff is RAM
@@ -372,24 +386,34 @@ pub struct MOS6502Target {
     // so that puts data frame stack in $0200-$05ff
     //
     // for instruction emission we need to know one more thing: where the program should be placed
-    // in memory. if the user does not specify, assume $8000.
+    // in memory. if the user does not specify, assume $8000 (this is the start of rom in the
+    // architecture we're assuming)
+    // zero page is the working registers
 
     // free registers are a u64 bitmap where 1 is free, 0 is used
     free_registers: u64,
     // vector of spill blocks which have been used and freed
-    free_spill: Vec<(u16, u16)>,
+    // args are start, length (max length is 255 because of limitations in the 6502 indirect addressing modes)
+    // the starts of spills are byte offsets from the stack data frame (since we spill to stack)
+    free_spill: Vec<(u8, u8)>,
     // where the next spill will take place
-    next_spill: u16,
+    next_spill: u8,
 }
 impl MOS6502Target {
     // low byte of the DFP
-    const DFP_LO: u16 = 0x0040;
-    // low byte of the indirection pointer
-    const IND_LO: u16 = 0x0042;
-    // low bytes of the two scratch registers
-    const SCR0_LO: u16 = 0x0044;
-    const SCR1_LO: u16 = 0x004B;
-
+    // this tracks the current base of the current stack data frame
+    const DFP_LO: u8 = 0x0040;
+    // addresses of all the float registers
+    // signs are 1 byte (always 1 bit), exponents are 2 bytes (11 bits at most), mantissas are 7 bytes (52 bits at most)
+    const SIG0: u8 = 0x42;
+    const EXP0_LO: u8 = 0x43;
+    const MAN0_LO: u8 = 0x45;
+    const SIG1: u8 = 0x4c;
+    const EXP1_LO: u8 = 0x4d;
+    const MAN1_LO: u8 = 0x4f;
+    const SIG2: u8 = 0x56;
+    const EXP2_LO: u8 = 0x57;
+    const MAN2_LO: u8 = 0x59;
     const PROG_START_DEFAULT: u16 = 0x8000;
 }
 impl Target for MOS6502Target {
@@ -416,12 +440,16 @@ impl Target for MOS6502Target {
         }
     }
 
-    fn alloc(&mut self, needed: usize) -> Vec<Self::Location> {
+    fn alloc(&mut self, needed: usize) -> Result<Vec<Self::Location>, String> {
+        // if we don't need any space, return an empty location vector
         if needed == 0 {
-            return vec![];
+            return Ok(vec![]);
+        }
+        else if needed > u8::MAX as usize {
+            return Err("Cannot allocate more than 255 memory".to_string());
         }
 
-        let needed = needed as u16;
+        let needed = needed as u8;
 
         // try to find space in the registers
         for start in 0..=(64 - needed) {
@@ -430,7 +458,7 @@ impl Target for MOS6502Target {
             if self.free_registers & mask == mask {
                 self.free_registers &= !mask;
 
-                return (start..start + needed).map(|i| MOS6502Location::RegisterPool(i as u8)).collect();
+                return Ok((start..start + needed).map(|i| MOS6502Location::RegisterPool(i as u8)).collect());
             }
         }
 
@@ -443,7 +471,7 @@ impl Target for MOS6502Target {
                 // unfree
                 self.free_spill.remove(i);
                 // and return all the locations in that block
-                return (start..start + needed).map(MOS6502Location::FrameSpill).collect();
+                return Ok((start..start + needed).map(MOS6502Location::FrameSpill).collect());
             }
             // fits too large?
             if len > needed {
@@ -452,21 +480,120 @@ impl Target for MOS6502Target {
                 // and shorten the block by that amount too
                 self.free_spill[i].1 -= needed;
                 // and return all the locations in the block before modification
-                return (start..start + needed).map(MOS6502Location::FrameSpill).collect();
+                return Ok((start..start + needed).map(MOS6502Location::FrameSpill).collect());
             }
         }
         // if we couldn't find any blocks to reuse, allocate more spill space
         let start = self.next_spill;
         self.next_spill += needed;
-        (start..start + needed).map(MOS6502Location::FrameSpill).collect()
+        if self.next_spill > u8::MAX {
+            return Err("Cannot allocate more than 255 spill".to_string());
+        }
+        Ok((start..start + needed).map(MOS6502Location::FrameSpill).collect())
     }
 
-    fn emit(program: &crate::datastructures::program::VRegProgram) {
+    fn emit(program: &crate::datastructures::program::VRegProgram) -> Result<Vec<u8>, String> {
         // emit a program
         // emit more or less in source order
         // we want to emit binary, not assembly
 
-        // first we set the 
+        // how do we emit a program?
+        // we need a datastructure to hold the program, aka a model of the target's memory
+        // this can just be an array of bytes
+        // it's wasteful to model the entire memory since only a part of it is rom
+        let mut system_rom = vec![0; 0xffff + 1];
+        // initialize the data frame pointer
+        system_rom[Self::DFP_LO as usize] = 0x00;
+        system_rom[Self::DFP_LO as usize + 1] = 0x02;
+
+        // where we're emitting to right now
+        let mut curr_emit_addr = MOS6502Target::PROG_START_DEFAULT;
+
+        // now the target is pretty much ready to go
+        // we go procedure by procedure and write instructions
+        for (proc_name, vreg_proc) in program.proc_table() {
+            // first we allocate for the procedure
+            let allocation = lin_alloc::<MOS6502Target>(vreg_proc)?;
+
+            println!("{}", proc_name);
+
+            // if the procedure is the entry point, write the reset vector
+            if proc_name == "main" {
+                system_rom[0xfffc] = curr_emit_addr.to_le_bytes()[0];
+                system_rom[0xfffd] = curr_emit_addr.to_le_bytes()[1];
+            }
+            
+            let mut write_bytes = | bytes: &[u8] | {
+                system_rom[curr_emit_addr as usize..curr_emit_addr as usize + bytes.len()].copy_from_slice(bytes);
+                curr_emit_addr += bytes.len() as u16;
+            };
+
+            for instruction in vreg_proc.instructions() {
+                println!("\t{:?}", instruction);
+                match instruction {
+                    VRegInstruction::LoadImm { dest, val } => {
+                        // look up the destination location
+                        let dloc = allocation.get(dest).unwrap();
+                        // loading immediate values happens as a byte loop
+                        for (location, byte) in zip(dloc, val.as_bytes()) {
+                            write_bytes(&codegen::store_byte(location, byte));
+                        }
+                    }
+                    VRegInstruction::Move { dest, src } => {
+                        // move is pretty easy, just load to accumulator/store to memory
+                        let dlocs = allocation.get(dest).unwrap();
+                        let slocs = allocation.get(src).unwrap();
+                        for (dloc, sloc) in zip(dlocs, slocs) {
+                            // load a with whatever was at the start register
+                            write_bytes(&codegen::load_acc(sloc));
+                            // write it to the destination
+                            write_bytes(&codegen::store_acc(dloc));
+                        }
+                    }
+
+                    // math stuff
+                    VRegInstruction::Add { dest, a, b } => {
+                        let dlocs = allocation.get(dest).unwrap();
+                        let alocs = allocation.get(a).unwrap();
+                        let blocs = allocation.get(b).unwrap();
+                        if dest.holds().is_integer() {
+                            // first clear the carry flag
+                            write_bytes(&MOS6502Instruction::CLC.to_bytes());
+                            // then for each a-b-d pair, perform the addition
+                            // carry flag is considered
+                            for (dloc, (aloc, bloc)) in zip(dlocs, zip(alocs, blocs)) {
+                                write_bytes(&codegen::add_whole(dloc, aloc, bloc))
+                            }
+                        }
+                        else {
+                            //todo!("floats are not implemented yet")
+                            write_bytes(&codegen::unpack_float(alocs, 0));
+                            write_bytes(&codegen::unpack_float(blocs, 1));
+                        }
+                    }
+                    VRegInstruction::Sub { dest, a, b } => {
+                        // subtraction is the same idea as addition, but we use SBC
+                        let dlocs = allocation.get(dest).unwrap();
+                        let alocs = allocation.get(a).unwrap();
+                        let blocs = allocation.get(b).unwrap();
+                        // for subtraction you have to set carry
+                        write_bytes(&MOS6502Instruction::SEC.to_bytes());
+                        // then for each a-b-d pair, subtract (considering carry)
+                        for (dloc, (aloc, bloc)) in zip(dlocs, zip(alocs, blocs)) {
+                            write_bytes(&codegen::sub_whole(dloc, aloc, bloc))
+                        }
+                    }
+                    VRegInstruction::Mul { dest, a, b } => {
+                        // multiplication is a little harder
+                        // we don't know what our registers contain, so we can't really make use of any fancy multiplication tricks (all of the stuff we know at compile time was handled already anyway)
+                        // so we just do booth's
+                    }
+
+                    _ => println!("\tunimplemented instruction: {:?}", instruction)
+                }
+            }
+        }
+        Ok(system_rom)
     }
 
     fn free(&mut self, locs: Vec<Self::Location>) {
@@ -485,7 +612,7 @@ impl Target for MOS6502Target {
         // because this method of freeing results in a bunch of tiny free blocks, we have to
         // coalesce free blocks afterwards
         self.free_spill.sort_by_key(|block| block.0);
-        let mut merged: Vec<(u16, u16)> = Vec::new();
+        let mut merged: Vec<(u8, u8)> = Vec::new();
         for block in &self.free_spill {
             // look at the last block we merged. if it ends where we start, extend it by our length
             if let Some(last) = merged.last_mut() && last.0 + last.1 == block.0 {
