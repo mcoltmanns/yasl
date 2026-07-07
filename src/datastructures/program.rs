@@ -102,6 +102,9 @@ pub struct VRegProgram {
     proc_table: HashMap<String, VRegProcedure>,
 }
 impl VRegProgram {
+    // lower an ir program to an infinite register format program
+    // register ids are local to program procedures
+    // also determines live ranges of registers within procedures
     pub fn lower(ir_program: &VirtualProgram) -> Self {
         let mut reg_proc_table: HashMap<String, VRegProcedure> = HashMap::new();
         let sig_table = &ir_program.sig_table();

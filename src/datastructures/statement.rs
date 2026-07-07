@@ -132,7 +132,7 @@ impl Literal {
         }
     }
 
-    // return the value in this literal as a vector of bytes in little-endian order
+    /// return the value in this literal as a vector of bytes in little-endian order
     pub fn as_bytes(&self) -> Vec<u8> {
         match self {
             Self::U8(v) => v.to_le_bytes().to_vec(),
