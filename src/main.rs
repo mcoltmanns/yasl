@@ -2,13 +2,15 @@ use yasl::datastructures::program::VRegProgram;
 use yasl::datastructures::program::VirtualProgram;
 use yasl::logger;
 use yasl::logger::Logger;
-use yasl::target::MOS6502Target;
 use yasl::target::Target;
+use yasl::target::mos6502::MOS6502Target;
 use yasl::target::lin_alloc;
 use yasl::tokenizer;
 use yasl::parser;
 use std::env;
 use std::fs;
+use std::fs::File;
+use std::io::Write;
 
 fn main() {
     println!("This is yasl {}", env!("CARGO_PKG_VERSION"));
@@ -98,12 +100,12 @@ fn main() {
     //
     // first step: map virtual registers to real locations
     //
-    let main_reg_map = lin_alloc::<MOS6502Target>(vreg_program.proc_table().get("loop_test").unwrap());
-    println!("{:#?}\n", main_reg_map);
+    //let main_reg_map = lin_alloc::<MOS6502Target>(vreg_program.proc_table().get("loop_test").unwrap());
+    //println!("{:#?}\n", main_reg_map);
 
-    // always emit your name as a label
-    println!("{}:", "loop_test".to_string());
-    for inst in vreg_program.proc_table()["loop_test"].instructions() {
-        MOS6502Target::emit_instruction(inst, &main_reg_map);
+    if let Ok(bin) = MOS6502Target::emit(&vreg_program) {
+        let mut file = File::create("./out.bin").unwrap();
+        file.write_all(&*bin);
     }
+    println!("done");
 }
