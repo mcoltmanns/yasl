@@ -18,9 +18,9 @@ All programs must have an entry point labeled `main`.
 - ptr
 
 ### Casting
-- cast <type>
+- cast \<type>
     - reinterpret the top of the stack as the given type (no conversion)
-- conv <type>
+- conv \<type>
     - convert the top of the stack to the given type (may truncate or extend)
 
 ### Comments
@@ -29,13 +29,13 @@ Comments start with a // and run to the newline.
 ### Constants
 Constants can be used to define typed literal values.
 These are substituted at compile time.
-- const <name> <type> <literal>
+- const <name> \<type> \<literal>
 
 ## Instructions
 All instructions consume their operands (values on the stack on which they operate) and place their result (if they have one) on the top of the stack.
 
 ### Stack control
-- push <type> <literal>
+- push \<type> \<literal>
     - put a literal on top of the stack
 - pop
     - drop the top of the stack
@@ -79,23 +79,23 @@ will leave 2 at the top of the stack (note argument order - rightmost first).
 - geq
 #### Memory control
 Careful! These also consume data on the stack.
-E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u8 -> memory 2 contains 1
-- load <type>
-    - load the value pointed to by the top of the stack as <type> onto the top of the stack
-- store <type>
+E.g: stack = 1 -> load u8 -> stack = \<data at addr 1>. Or stack = 1 2 -> store u8 -> memory 2 contains 1
+- load \<type>
+    - load the value pointed to by the top of the stack as \<type> onto the top of the stack
+- store \<type>
     - store the value at the top of the stack to the location at the second position in the stack
 
 ### Control flow
-- label <name>
+- label \<name>
     - define a label to jump to. Labels must be globally unique.
-- proc <name> in <type1> ... <typeN> out <type1> ... <typeN> def
+- proc \<name> in \<type1> ... \<typeN> out \<type1> ... \<typeN> def
     - define a procedure with guaranteed input and output types.
-- jump <name>
+- jump \<name>
     - jump to a label. Jumps may be forward or backward, but cannot cross procedure boundaries.
-- jumpif <name>
+- jumpif \<name>
     - conditional jump. Consumes top, and jumps if not 0.
     - jumpif can only operate on integer types (i or u)
-- call <name>
+- call \<name>
     - call a procedure. Control is returned to the caller afterwards.
     - when a procedure begins execution, its stack will contain only the types defined in its signature.
 - ret
@@ -103,5 +103,6 @@ E.g: stack = 1 -> load u8 -> stack = <data at addr 1>. Or stack = 1 2 -> store u
     - when ret is called, a procedure's data stack must contain only the types defined in its signature.
 
 ### Interrupts
-- trap <vector>
-    - trigger a maskable software interrupt with the given vector.
+- trap
+  - trigger a software interrupt
+  - interrupts will always be serviced immediately, except when one is already being serviced
