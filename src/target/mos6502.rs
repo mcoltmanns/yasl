@@ -531,7 +531,21 @@ impl Target for MOS6502Target {
             for instruction in vreg_proc.instructions() {
                 println!("\t{:?}", instruction);
                 match instruction {
+                    // load a literal into memory
                     VRegInstruction::LoadImm { dest, val } => {
+                        // pointers are target-dependent, so we have to do pointer bounds checking here
+                        // it's guaranteed to be non-negative since it's a u64, so we just have to check the upper bounds
+                        if *dest.holds() == DType::Pointer {
+                            // if a pointer fits in 2 bytes, only the two lsb will be nonzero
+                            // so if the length is > 2 and all bytes 2.. are 0, the pointer will fit
+                            // the length check shouldn't be necessary? but it's safer
+                            let ptr_bytes = val.as_bytes();
+                            let fits = ptr_bytes.len() > 2 && ptr_bytes[2..].iter().all(|&x| x == 0);
+                            if !fits {
+                                // TODO instead of panicking here, you need to make VRegInstruction a positionable struct and integrate the target into the usual error-reporting framework
+                                panic!("pointer too large for target address space");
+                            }
+                        }
                         // look up the destination location
                         let dloc = allocation.get(dest).unwrap();
                         // loading immediate values happens as a byte loop
