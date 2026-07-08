@@ -32,6 +32,7 @@ pub enum MOS6502Location {
 ///
 /// apply indirection, then index (y modifies the pointer)
 pub enum MOS6502Instruction {
+    // TODO branch instructions should always take an i8
     BRK,
     BPL(u8),
     JSR(u16),
@@ -46,7 +47,7 @@ pub enum MOS6502Instruction {
     CPY(u8),
     BNE(u8),
     CPX(u8),
-    BEQ(u8),
+    BEQ(i8),
     ORAX(u8),
     ORAY(u8),
     ANDX(u8),
@@ -201,7 +202,7 @@ impl MOS6502Instruction {
             MOS6502Instruction::CPY(arg) => vec![0xc0, *arg],
             MOS6502Instruction::BNE(arg) => vec![0xd0, *arg],
             MOS6502Instruction::CPX(arg) => vec![0xe0, *arg],
-            MOS6502Instruction::BEQ(arg) => vec![0xf0, *arg],
+            MOS6502Instruction::BEQ(arg) => vec![0xf0, arg.cast_unsigned()], // write the i8 as its byte representation
             MOS6502Instruction::ORAX(arg) => vec![0x01, *arg],
             MOS6502Instruction::ORAY(arg) => vec![0x11, *arg],
             MOS6502Instruction::ANDX(arg) => vec![0x21, *arg],
@@ -351,28 +352,32 @@ pub struct MOS6502Target {
     //
     // the first 64 bytes ($0000-$0039) are the zero page register pool (used by the compiler during register allocation)
     // $0040-$0041 is DFP (data frame pointer)
-    // $0042-$0052 are floating point scratch
+    // $0042-$0066 are floating point scratch
     // it's much easier (at little spatial cost) to work on floats when their components are byte-aligned
     // all of these float sections have enough space for the components of an up to 64 bit float
     // also all of the mantissa registers have enough room to be used as 64-bit math accumulators if need be
     // $0042 is SIG0 (sign 0)
     // $0043-$0044 is EXP0 (exponent 0)
-    // $0045-$004c is MAN0 (mantissa 0)
-    // $004d is SIG1 (sign 1)
-    // $004e-$004f is EXP1 (exponent 1)
-    // $0050-$0057 is MAN1 (mantissa 1)
-    // $0058 is SIG2
-    // $0059-$0060 is EXP2
-    // $0061-$0068 is MAN2
+    // $0045-$004b is MAN0 (mantissa 0)
+    // $004c is SIG1 (sign 1)
+    // $004d-$004e is EXP1 (exponent 1)
+    // $004f-$0055 is MAN1 (mantissa 1)
+    // $0056 is SIG2
+    // $0057-$0058 is EXP2
+    // $0059-$0066 is MAN2
+    // $0067-$0068 is IND (indirection pointer, for loading values from pointers)
     // $0000-$0068 are all compiler reserved
     // $0069-$00ff is free zero page (for the user)
     // $0100-$01ff is the hardware stack
     // $0200-$05ff is the data frame stack (grows down, holds arguments and spills)
+    // although the user only has 151B of zero page, they are free to use the eeprom however they want - the compiler will never touch it
+    // are write speeds a problem? yes. writing to eeprom is very very slow.
+    // maybe reconsider your memory map, give the user more RAM
     //
     // tying in with hardware specs:
     // $0000-$5fff is RAM
     // $6000-$7fff is devices
-    // $8000-$FFFF is ROM
+    // $8000-$FFFF is eeprom
     //
     // in order to keep a stack overflow from overwriting data in memory, the data frame stack
     // should grow down towards the hardware stack. that way if something does happen, at least
@@ -403,7 +408,7 @@ impl MOS6502Target {
     // low byte of the DFP
     // this tracks the current base of the current stack data frame
     const DFP_LO: u8 = 0x0040;
-    // addresses of all the float registers
+    // addresses of all the float manipulation registers
     // signs are 1 byte (always 1 bit), exponents are 2 bytes (11 bits at most), mantissas are 7 bytes (52 bits at most)
     const SIG0: u8 = 0x42;
     const EXP0_LO: u8 = 0x43;
@@ -411,9 +416,11 @@ impl MOS6502Target {
     const SIG1: u8 = 0x4c;
     const EXP1_LO: u8 = 0x4d;
     const MAN1_LO: u8 = 0x4f;
+    // TODO do you need the third float register? maybe for multiplication
     const SIG2: u8 = 0x56;
     const EXP2_LO: u8 = 0x57;
     const MAN2_LO: u8 = 0x59;
+    const IND_LO: u8 = 0x67;
     const PROG_START_DEFAULT: u16 = 0x8000;
 }
 impl Target for MOS6502Target {
@@ -425,10 +432,6 @@ impl Target for MOS6502Target {
             free_spill: vec![],
             next_spill: 0
         }
-    }
-
-    fn pointer_width(&self) -> u8 {
-        16
     }
 
     fn locs_needed(dtype: DType) -> usize {
@@ -522,6 +525,11 @@ impl Target for MOS6502Target {
                 system_rom[0xfffc] = curr_emit_addr.to_le_bytes()[0];
                 system_rom[0xfffd] = curr_emit_addr.to_le_bytes()[1];
             }
+            // if the procedure is the interrupt handler, write the reset vector
+            if proc_name == "interrupt" {
+                system_rom[0xfffe] = curr_emit_addr.to_le_bytes()[0];
+                system_rom[0xffff] = curr_emit_addr.to_le_bytes()[1];
+            }
             
             let mut write_bytes = | bytes: &[u8] | {
                 system_rom[curr_emit_addr as usize..curr_emit_addr as usize + bytes.len()].copy_from_slice(bytes);
@@ -531,6 +539,7 @@ impl Target for MOS6502Target {
             for instruction in vreg_proc.instructions() {
                 println!("\t{:?}", instruction);
                 match instruction {
+                    // MEMORY CONTROL
                     // load a literal into memory
                     VRegInstruction::LoadImm { dest, val } => {
                         // pointers are target-dependent, so we have to do pointer bounds checking here
@@ -538,9 +547,9 @@ impl Target for MOS6502Target {
                         if *dest.holds() == DType::Pointer {
                             // if a pointer fits in 2 bytes, only the two lsb will be nonzero
                             // so if the length is > 2 and all bytes 2.. are 0, the pointer will fit
-                            // the length check shouldn't be necessary? but it's safer
                             let ptr_bytes = val.as_bytes();
-                            let fits = ptr_bytes.len() > 2 && ptr_bytes[2..].iter().all(|&x| x == 0);
+                            assert!(ptr_bytes.len() > 2); // sanity check
+                            let fits = ptr_bytes[2..].iter().all(|&x| x == 0);
                             if !fits {
                                 // TODO instead of panicking here, you need to make VRegInstruction a positionable struct and integrate the target into the usual error-reporting framework
                                 panic!("pointer too large for target address space");
@@ -553,7 +562,7 @@ impl Target for MOS6502Target {
                             write_bytes(&codegen::store_byte(location, byte));
                         }
                     }
-                    // load a register from RAM
+                    // load a register from RAM or ROM
                     // here addr holds a pointer to some value, and dest is the place we want to move that value to
                     // dest/the value to load may be more than one byte
                     VRegInstruction::LoadMem { dest, addr } => {
@@ -577,6 +586,7 @@ impl Target for MOS6502Target {
                             write_bytes(&mut MOS6502Instruction::INY.to_bytes());
                         }
                     }
+                    // move a value between two locations in RAM
                     VRegInstruction::Move { dest, src } => {
                         // move is pretty easy, just load to accumulator/store to memory
                         let dlocs = allocation.get(dest).unwrap();
@@ -594,6 +604,8 @@ impl Target for MOS6502Target {
                         let addr_bytes = allocation.get(addr).unwrap();
                         let slocs = allocation.get(src).unwrap();
                         assert_eq!(addr_bytes.len(), 2);
+                        // TODO this is only the easy case! when writing to addresses outside of RAM (pointer > $5fff), you will have to check device status and only write when ready for the next byte.
+                        // TODO some eeproms allow block writing
                         // write pointer to indirection register
                         for i in 0..2 {
                             write_bytes(&codegen::load_acc(&addr_bytes[i]));
@@ -632,9 +644,13 @@ impl Target for MOS6502Target {
                             }
                         }
                         else {
-                            //todo!("floats are not implemented yet")
+                            // unpack the floats to the float scratch registers
                             write_bytes(&codegen::unpack_float(alocs, 0));
                             write_bytes(&codegen::unpack_float(blocs, 1));
+                            // bla bla bla, do float addition
+                            // repack the floats
+                            write_bytes(&codegen::pack_float(alocs, 0));
+                            write_bytes(&codegen::pack_float(blocs, 1));
                         }
                     }
                     VRegInstruction::Sub { dest, a, b } => {
