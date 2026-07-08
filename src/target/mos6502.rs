@@ -553,6 +553,30 @@ impl Target for MOS6502Target {
                             write_bytes(&codegen::store_byte(location, byte));
                         }
                     }
+                    // load a register from RAM
+                    // here addr holds a pointer to some value, and dest is the place we want to move that value to
+                    // dest/the value to load may be more than one byte
+                    VRegInstruction::LoadMem { dest, addr } => {
+                        let addr_bytes = allocation.get(addr).unwrap();
+                        let dlocs = allocation.get(dest).unwrap();
+                        assert_eq!(addr_bytes.len(), 2); // sanity check (should be enforced by allocator)
+                        // write the pointer to the indirection register
+                        for i in 0..2 {
+                            write_bytes(&codegen::load_acc(&addr_bytes[i]));
+                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes())
+                        }
+                        // clear y register
+                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes());
+                        // now we can index through y, incrementing each time
+                        for dloc in dlocs {
+                            // load a with *((ind_lo) + y) (the current byte of what's at the pointer)
+                            write_bytes(&mut MOS6502Instruction::LDAY(Self::IND_LO).to_bytes());
+                            // store the byte
+                            write_bytes(&codegen::store_acc(dloc));
+                            // increment y
+                            write_bytes(&mut MOS6502Instruction::INY.to_bytes());
+                        }
+                    }
                     VRegInstruction::Move { dest, src } => {
                         // move is pretty easy, just load to accumulator/store to memory
                         let dlocs = allocation.get(dest).unwrap();
@@ -564,6 +588,34 @@ impl Target for MOS6502Target {
                             write_bytes(&codegen::store_acc(dloc));
                         }
                     }
+                    // here src holds some value, and addr holds a pointer that we want to write that value to
+                    // basically the reverse of loadmem
+                    VRegInstruction::Store { addr, src } => {
+                        let addr_bytes = allocation.get(addr).unwrap();
+                        let slocs = allocation.get(src).unwrap();
+                        assert_eq!(addr_bytes.len(), 2);
+                        // write pointer to indirection register
+                        for i in 0..2 {
+                            write_bytes(&codegen::load_acc(&addr_bytes[i]));
+                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes());
+                        }
+                        // clear y register
+                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes());
+                        // now we can index through y, incrementing each time
+                        for sloc in slocs {
+                            // load a with what's at the source
+                            write_bytes(&codegen::load_acc(sloc));
+                            // store a at ind+y
+                            write_bytes(&mut MOS6502Instruction::STAY(Self::IND_LO).to_bytes());
+                            // increment y
+                            write_bytes(&mut MOS6502Instruction::INY.to_bytes());
+                        }
+                    }
+
+                    // CASTING
+                    //VRegInstruction::Cast { dest, src, to} => {
+                    //    // casting is a lot of work
+                    //}
 
                     // math stuff
                     VRegInstruction::Add { dest, a, b } => {
