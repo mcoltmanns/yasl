@@ -112,18 +112,18 @@ impl Literal {
                 };
 
                 match dtype {
-                    DType::I8 => i8::from_str_radix(repr, radix).map(Literal::I8).map_err(|e| e.to_string()),
-                    DType::I16 => i16::from_str_radix(repr, radix).map(Literal::I16).map_err(|e| e.to_string()),
-                    DType::I32 => i32::from_str_radix(repr, radix).map(Literal::I32).map_err(|e| e.to_string()),
-                    DType::I64 => i64::from_str_radix(repr, radix).map(Literal::I64).map_err(|e| e.to_string()),
-                    DType::U8 => u8::from_str_radix(repr, radix).map(Literal::U8).map_err(|e| e.to_string()),
-                    DType::U16 => u16::from_str_radix(repr, radix).map(Literal::U16).map_err(|e| e.to_string()),
-                    DType::U32 => u32::from_str_radix(repr, radix).map(Literal::U32).map_err(|e| e.to_string()),
-                    DType::U64 => u64::from_str_radix(repr, radix).map(Literal::U64).map_err(|e| e.to_string()),
-                    DType::F16 => repr.parse::<f16>().map(Literal::F16).map_err(|e| e.to_string()),
-                    DType::F32 => repr.parse::<f32>().map(Literal::F32).map_err(|e| e.to_string()),
-                    DType::F64 => repr.parse::<f64>().map(Literal::F64).map_err(|e| e.to_string()),
-                    DType::Pointer => u64::from_str_radix(repr, radix).map(Literal::Pointer).map_err(|e| e.to_string()),
+                    DType::I8 => i8::from_str_radix(repr, radix).map(Literal::I8).map_err(|e| format!("could not parse i8: {}", e.to_string())),
+                    DType::I16 => i16::from_str_radix(repr, radix).map(Literal::I16).map_err(|e| format!("could not parse i16: {}", e.to_string())),
+                    DType::I32 => i32::from_str_radix(repr, radix).map(Literal::I32).map_err(|e| format!("could not parse i32: {}", e.to_string())),
+                    DType::I64 => i64::from_str_radix(repr, radix).map(Literal::I64).map_err(|e| format!("could not parse i64: {}", e.to_string())),
+                    DType::U8 => u8::from_str_radix(repr, radix).map(Literal::U8).map_err(|e| format!("could not parse u8: {}", e.to_string())),
+                    DType::U16 => u16::from_str_radix(repr, radix).map(Literal::U16).map_err(|e| format!("could not parse u16: {}", e.to_string())),
+                    DType::U32 => u32::from_str_radix(repr, radix).map(Literal::U32).map_err(|e| format!("could not parse u32: {}", e.to_string())),
+                    DType::U64 => u64::from_str_radix(repr, radix).map(Literal::U64).map_err(|e| format!("could not parse u64: {}", e.to_string())),
+                    DType::F16 => repr.parse::<f16>().map(Literal::F16).map_err(|e| format!("could not parse f16: {}", e.to_string())),
+                    DType::F32 => repr.parse::<f32>().map(Literal::F32).map_err(|e| format!("could not parse f32: {}", e.to_string())),
+                    DType::F64 => repr.parse::<f64>().map(Literal::F64).map_err(|e| format!("could not parse f64: {}", e.to_string())),
+                    DType::Pointer => u64::from_str_radix(repr, radix).map(Literal::Pointer).map_err(|e| format!("could not parse pointer: {}", e.to_string())),
                 }
             }
             _ => {
