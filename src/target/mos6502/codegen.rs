@@ -1,3 +1,7 @@
+/**
+* macros for codegen for the 6502
+*/
+
 use crate::target::mos6502::{MOS6502Instruction, MOS6502Location, MOS6502Target};
 
 /// store a literal byte at the given location
@@ -15,13 +19,13 @@ pub fn store_byte(location: &MOS6502Location, byte: u8) -> Vec<u8> {
             out.append(&mut MOS6502Instruction::LDY(*i).to_bytes());
             // then store a at the dfp plus the y register
             out.append(&mut MOS6502Instruction::STAY(MOS6502Target::DFP_LO).to_bytes());
-            println!("\t\twrite {} to {:02X} plus DFP", byte, *i);
+            println!("\t\twrite {:02X} to {:02X} plus DFP", byte, *i);
         }
         // registerpool is a direct location in zero page
         MOS6502Location::RegisterPool(i) => {
             // store a zero page
             out.append(&mut MOS6502Instruction::STAZ(*i).to_bytes());
-            println!("\t\twrite {} to {:02X}", byte, *i);
+            println!("\t\twrite {:02X} to {:02X}", byte, *i);
         }
     }
     out
@@ -170,7 +174,6 @@ pub fn unpack_float(from: &[MOS6502Location], reg: usize) -> Vec<u8> {
             out.append(&mut MOS6502Instruction::AND(frac_mask).to_bytes());
             // don't need to align because the bits are already at the bottom of the byte
             // but we place it at frac_dest + 1 because this is the high part of the fraction
-            // when reconstructing remember you have to ASL this 8x for it to make any sense
             out.append(&mut MOS6502Instruction::STAZ(man_dest + 1).to_bytes());
             // and then the low part of the fraction
             out.append(&mut load_acc(bottom));
@@ -182,7 +185,7 @@ pub fn unpack_float(from: &[MOS6502Location], reg: usize) -> Vec<u8> {
             let top_byte = &from[3];
             let second_byte = &from[2];
             // top contains sign and most of the exponent
-            // second contains 7 bits of the exponent and one of the mantissa
+            // second contains 1 bit of the exponent and 7 of the mantissa
             let sign_mask: u8 = 0b1000_0000;
             let top_exp_mask: u8 = !sign_mask;
             let bottom_exp_mask: u8 = 0b1000_0000;
@@ -203,7 +206,7 @@ pub fn unpack_float(from: &[MOS6502Location], reg: usize) -> Vec<u8> {
             // then load the second byte
             out.append(&mut load_acc(second_byte));
             out.append(&mut MOS6502Instruction::TAX.to_bytes());
-            // mask out the last bit of the exponent
+            // mask out the bottom bit of the exponent (it's at the top of the byte though)
             out.append(&mut MOS6502Instruction::AND(bottom_exp_mask).to_bytes());
             // rotate left twice, that puts it in the right place
             // have to clear carry so we don't contaminate the masked result
