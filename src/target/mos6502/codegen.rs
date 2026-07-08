@@ -305,3 +305,133 @@ pub fn unpack_float(from: &[MOS6502Location], reg: usize) -> Vec<u8> {
     }
     out
 }
+
+/// pack a float of arbitrary width from one of the float scratch registers back into memory (memory means either a zp virtual register or an actual RAM spill location)
+pub fn pack_float(to: &[MOS6502Location], reg: usize) -> Vec<u8> {
+    // TODO think this is working but it's hard to tell. how to test??
+    let mut out = vec![];
+    // decide where we're gonna pack from
+    let sign_src;
+    let exp_src;
+    let man_src;
+    match reg {
+        0 => {
+            sign_src = MOS6502Target::SIG0;
+            exp_src = MOS6502Target::EXP0_LO;
+            man_src = MOS6502Target::MAN0_LO;
+        }
+        1 => {
+            sign_src = MOS6502Target::SIG1;
+            exp_src = MOS6502Target::EXP1_LO;
+            man_src = MOS6502Target::MAN1_LO;
+        }
+        2 => {
+            sign_src = MOS6502Target::SIG2;
+            exp_src = MOS6502Target::EXP2_LO;
+            man_src = MOS6502Target::MAN2_LO;
+        }
+        _ => {
+            panic!("unsupported reg {}", reg);
+        }
+    }
+    // then pack
+    // again, figure the width of the float from the number of locations passed
+    // packing is simpler
+    match to.len() {
+        2 => {
+            let bottom = &to[0];
+            let top = &to[1];
+            // the sign bit comes aligned to the top of the byte, where we want it anyway, so let's not worry about that yet
+            // the top two bits of the mantissa are also already aligned properly
+            // so first load the exponent bits and shift them to the middle of the byte
+            // it's faster to load then shift because we need the information in accumulator anyway
+            out.append(&mut MOS6502Instruction::LDAZ(exp_src).to_bytes());
+            for _ in 0..2 {
+                out.append(&mut MOS6502Instruction::ASL.to_bytes());
+            }
+            // now it's as easy as doing ORA with the sign and the top part of the mantissa
+            out.append(&mut MOS6502Instruction::ORAZ(sign_src).to_bytes());
+            out.append(&mut MOS6502Instruction::ORAZ(man_src + 1).to_bytes());
+            // the top byte is done, write it
+            out.append(&mut store_acc(top));
+            // then the bottom byte is one load and one store
+            out.append(&mut MOS6502Instruction::LDAZ(man_src).to_bytes());
+            out.append(&mut store_acc(bottom));
+        }
+        4 => {
+            let top = &to[3];
+            let second = &to[2];
+            // top gets sign and 7 bits of exponent
+            // second gets 1 bit of exponent and 7 of mantissa
+            // lda/tax is just as expensive as doing lda 2x
+            // use the carry flag to hold the bottom bit of the exponent - clear it first
+            out.append(&mut MOS6502Instruction::CLC.to_bytes());
+            // load the exponent byte (doesn't touch carry)
+            out.append(&mut MOS6502Instruction::LDAZ(exp_src).to_bytes());
+            // ROR 1x, puts the bottom bit in the carry flag
+            out.append(&mut MOS6502Instruction::ROR.to_bytes());
+            // OR in the sign bit (doesn't touch carry)
+            out.append(&mut MOS6502Instruction::ORAZ(sign_src).to_bytes());
+            // store top byte (doesn't touch carry)
+            out.append(&mut store_acc(top));
+            // ROR again, puts the bottom bit of the exponent (top bit of second byte) at the top of acc
+            out.append(&mut MOS6502Instruction::ROR.to_bytes());
+            // the bottom of the second byte is the top 7 bits of the mantissa
+            // luckily these are already byte-aligned and stored at man_src + 2, so we just need to ORA and write
+            out.append(&mut MOS6502Instruction::ORAZ(man_src + 2).to_bytes());
+            out.append(&mut store_acc(second));
+            // and then just load/store the other two bytes of mantissa
+            for i in 0..2 {
+                out.append(&mut MOS6502Instruction::LDAZ(man_src + i as u8).to_bytes());
+                out.append(&mut store_acc(&to[i]));
+            }
+        }
+        8 => {
+            let top = &to[7];
+            let second = &to[6];
+            // top gets sign and 7 msbits of exponent
+            // second gets 4 lsbits of exponent, 4 bits of mantissa
+            // like with unpacking, the alignment is really not that great on the exponent
+            // exp_src holds the 8 lsb of the exponent, exp_src + 1 holds the top 3, and nothing is really aligned at all
+            // top byte: sign 7msb exponent
+            // load the top bits of the exponent
+            out.append(&mut MOS6502Instruction::LDAZ(exp_src + 1).to_bytes());
+            // shift them left 4x
+            for _ in 0..4 {
+                out.append(&mut MOS6502Instruction::ASL.to_bytes());
+            }
+            // write them back - load-shift-write is 3+2*4+3 = 18 cycles, as opposed to shifting in place which is 4*5=20 cycles
+            out.append(&mut MOS6502Instruction::STAZ(exp_src + 1).to_bytes());
+            // load 8 lsb of exponent
+            out.append(&mut MOS6502Instruction::LDAZ(exp_src).to_bytes());
+            // we care about the top nibble of these, shift right 4x to isolate
+            for _ in 0..4 {
+                out.append(&mut MOS6502Instruction::LSR.to_bytes());
+            }
+            // OR in the top 3 bits of the exponent we saved earlier
+            out.append(&mut MOS6502Instruction::ORAZ(exp_src + 1).to_bytes());
+            // OR in the sign
+            out.append(&mut MOS6502Instruction::ORAZ(sign_src).to_bytes());
+            // top byte done
+            out.append(&mut store_acc(top));
+            // second byte: 4lsb exponent 4msb mantissa
+            // load the exponent
+            out.append(&mut MOS6502Instruction::LDAZ(exp_src).to_bytes());
+            // shift it left so the 4 lsb are in top nibble
+            for _ in 0..4 {
+                out.append(&mut MOS6502Instruction::ASL.to_bytes());
+            }
+            // the top nibble of the mantissa is already byte-aligned, so just or it with acc
+            out.append(&mut MOS6502Instruction::ORAZ(man_src + 6).to_bytes());
+            // done second byte
+            out.append(&mut store_acc(second));
+            // top two bytes are done, now the bottom 6 are just copying
+            for i in 0..6 {
+                out.append(&mut MOS6502Instruction::LDAZ(man_src + i as u8).to_bytes());
+                out.append(&mut store_acc(&to[i]));
+            }
+        }
+        _ => panic!("unknown float size")
+    }
+    out
+}
