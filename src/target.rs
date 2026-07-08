@@ -22,8 +22,6 @@ pub trait Target {
     // free locations back to their regions
     fn free(&mut self, locs: Vec<Self::Location>);
 
-    // how many bits is a pointer?
-    fn pointer_width(&self) -> u8;
     // how many locations do we need to store a value of a type?
     fn locs_needed(dtype: DType) -> usize;
 
@@ -64,7 +62,9 @@ pub fn lin_alloc<T: Target>(vproc: &VRegProcedure) -> Result<HashMap<VReg, Vec<T
         // is allocate for this range, add that to the map, and continue
         // find out how many locations we need for this virtual register
         let needed = T::locs_needed(*i.register().holds());
+        // then allocate those locations, if possible, and insert them to the map
         alloc_map.insert(*i.register(), target.alloc(needed)?);
+        // refresh the live range
         active.push(i);
     }
 

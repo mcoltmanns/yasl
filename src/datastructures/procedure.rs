@@ -18,6 +18,21 @@ use crate::target::Target;
 use crate::util::FilePos;
 use crate::util::Positionable;
 
+// how will you handle interrupts? in a system-agnostic way?
+// have one interrupt-handling procedure: interrupt
+// it can take no parameters and can return no values (zero data stack effects)
+// on the codegen side, it must save and restore all registers - or just never touch them (but a procedure that can't touch registers won't get you very far)
+// should you give it its own zero page register block?
+// should you allow interrupt to call other procedures?
+// should you allow other procedures to call interrupt?
+// should you allow nested interrupts? no, too complex
+/*
+the problem with interrupts is they can happen anywhere, so the "caller" (the procedure that was interrupted) can't save their registers, and the interrupt has no way to know what registers it should save since it can't know at runtime what it's interrupting.
+the way around this is to know which registers the interrupt will need, and to only save and restore those
+so analyze the interrupt as its own "sub program" (own entry point, own allocation table, etc) - then the values in the allocation table will tell you exactly what hardware locations you need to save and restore, as long as you never touch anything else
+probably a good idea to emit a warning if the interrupt routine uses too many registers
+ */
+
 #[derive(Debug)]
 pub struct VirtualProcedure {
     name: String,
@@ -71,6 +86,7 @@ impl VirtualProcedure {
         Some(self.block_links.get(block_i)?.iter().enumerate().filter(|(_succ_id, linked)| { **linked }).map(|(succ_id, _linked)| { succ_id }).collect())
     }
 
+    /// divide a procedure into basic blocks, associate jumps with the blocks they point to
     pub fn build_blocks_and_jumps(&mut self, logger: &mut dyn Logger) {
         if self.statements.is_empty() {
             logger.error("undefined procedure", self.pos.clone());
@@ -123,6 +139,7 @@ self.blocks.push(BasicBlock::new(i, 1, s.pos().clone()));
         self.block_links = vec![vec![false; self.blocks.len()]; self.blocks.len()];
     }
 
+    /// link basic blocks within a procedure
     pub fn link_blocks(&mut self, logger: &mut dyn Logger) {
         for b_i in 0..self.blocks.len() {
             // last statement in a block determines successors
@@ -155,7 +172,7 @@ logger.error("invalid jump destination", s.pos().clone());
                 }
                 // rets have no successors
                 StatementPayload::Ret => {}
-                // anything else is succeeded by the block after if
+                // anything else is succeeded by the block after it
                 _ => {
                     let next_id = b_i + 1;
                     if next_id < self.blocks.len() {
@@ -544,8 +561,6 @@ logger.error("invalid jump destination", s.pos().clone());
                 };
             }
 
-            //println!("get {:?}", entry_stack);
-            //println!("leave {:?}", exit_stack);
             // then propagate the output stack to the successors
             for (succ_id, _) in self.block_links[current_id].iter().enumerate().filter(|(_, linked)| { **linked }) {
                 if let Some(existing_entry_stack) = self.block_entry_stacks.get(&succ_id) {

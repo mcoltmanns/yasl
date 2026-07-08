@@ -5,17 +5,16 @@ use std::fmt::Display;
 
 pub struct VirtualProgram {
     proc_table: HashMap<String, VirtualProcedure>,
-
-    // later on there will be more things to think about here
-    // target? memory layout?
-    // things that we need to actually get the program to run
+    // map procedure names to the list of procedure names they call
+    x_calls_y: HashMap<String, Vec<String>>
 }
 impl VirtualProgram {
     /// Constructs an IR program from a series of statements.
     /// This builds the procedure table and fills it with procedures.
-    /// It does not build the procedure link table.
+    /// TODO it also builds the procedure link table/call graph
     pub fn new(statements: &[VirtualStatement], logger: &mut dyn Logger) -> Self {
         let mut proc_table = HashMap::new();
+        let mut x_calls_y = HashMap::new();
 
         let mut current_proc: Option<VirtualProcedure> = None;
         let mut current_statements: Vec<VirtualStatement> = vec![];
@@ -40,8 +39,13 @@ impl VirtualProgram {
                 }
                 _ => {
                     match &current_proc {
-                        Some(_) => {
+                        Some(proc) => {
                             current_statements.push(s.clone());
+                            if let StatementPayload::Call { dest } = s.payload() {
+                                if x_calls_y.get(proc.name()).is_some_and(|callees_list: &Vec<String> | { callees_list.contains(&dest) }) {
+                                    // TODO build call graph??!
+                                }
+                            }
                         }
                         None => {
                             logger.warning("unreachable code", s.pos().clone());
@@ -63,7 +67,7 @@ impl VirtualProgram {
             logger.error("no main procedure defined", FilePos::new("", 0, 0));
         }
 
-        VirtualProgram { proc_table }
+        VirtualProgram { proc_table, x_calls_y }
     }
 
     pub fn sig_table(&self) -> HashMap<String, (Vec<DType>, Vec<DType>)> {

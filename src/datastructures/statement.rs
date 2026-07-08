@@ -236,11 +236,11 @@ impl Positionable for VirtualStatement {
     fn pos(&self) -> &FilePos {
         &self.pos
     }
-    fn col(&self) -> usize {
-        self.pos.col
-    }
     fn line(&self) -> usize {
         self.pos.line
+    }
+    fn col(&self) -> usize {
+        self.pos.col
     }
 }
 
