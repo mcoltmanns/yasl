@@ -134,7 +134,6 @@ impl Parser {
                                 return;
                             }
                         };
-                        self.tokens.next();
                     }
                     _ => {
                         // if it isn't a name, try to parse a datatype
