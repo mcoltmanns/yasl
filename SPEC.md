@@ -71,7 +71,7 @@ push 3
 push 5
 sub
 ```
-will leave 2 at the top of the stack (note argument order - rightmost first).
+will leave -2 at the top of the stack (note argument order - leftmost first - above example does `3 - 5`).
 #### Math
 - add
 - sub
