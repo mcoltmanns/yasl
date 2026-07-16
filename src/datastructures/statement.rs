@@ -244,9 +244,25 @@ impl Positionable for VirtualStatement {
     }
 }
 
+pub struct VirtualInstruction {
+    payload: InstructionPayload,
+    pos: FilePos,
+}
+impl VirtualInstruction {
+    pub fn new(payload: InstructionPayload, pos: FilePos) -> Self {
+        Self { payload, pos }
+    }
+    pub fn payload(&self) -> &InstructionPayload { &self.payload }
+}
+impl Positionable for VirtualInstruction {
+    fn pos(&self) -> &FilePos { &self.pos }
+    fn line(&self) -> usize { self.pos.line }
+    fn col(&self) -> usize { self.pos.col }
+}
+
 // args are always dest arg1 arg2
 #[derive(Debug)]
-pub enum VRegInstruction {
+pub enum InstructionPayload {
     // load a literal to a register
     LoadImm { dest: VReg, val: Literal },
     // load a register from memory
@@ -297,7 +313,7 @@ pub enum VRegInstruction {
     Gt  { dest: VReg, a: VReg, b: VReg },
     Geq { dest: VReg, a: VReg, b: VReg },
 }
-impl VRegInstruction {
+impl InstructionPayload {
     pub fn registers(&self) -> Vec<VReg> {
         match self {
             Self::Add { dest, a, b }

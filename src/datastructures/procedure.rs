@@ -2,35 +2,37 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt::Display;
-use std::fmt::write;
 
 use crate::datastructures::TypeStackEntry;
 use crate::datastructures::basicblock::BasicBlock;
-use crate::datastructures::statement::DType;
+use crate::datastructures::statement::{DType, VirtualInstruction};
 use crate::datastructures::statement::StatementPayload;
 use crate::datastructures::statement::VirtualStatement;
-use crate::datastructures::statement::VRegInstruction;
+use crate::datastructures::statement::InstructionPayload;
 use crate::datastructures::TypeStack;
 use crate::logger::Logger;
 use crate::regmachine::VReg;
 use crate::regmachine::VRegAllocator;
-use crate::target::Target;
 use crate::util::FilePos;
 use crate::util::Positionable;
 
 // how will you handle interrupts? in a system-agnostic way?
-// have one interrupt-handling procedure: interrupt
+// have one interrupt-handling procedure: trap
 // it can take no parameters and can return no values (zero data stack effects)
 // on the codegen side, it must save and restore all registers - or just never touch them (but a procedure that can't touch registers won't get you very far)
 // should you give it its own zero page register block?
 // should you allow interrupt to call other procedures?
 // should you allow other procedures to call interrupt?
 // should you allow nested interrupts? no, too complex
+// do you want to allow arguments in main and in trap?
+// yes in main (the user might know about values on the stack that the compiler has no way to know about)
+// no in trap (the interrupt handler must be transparent/zero-effect)
 /*
 the problem with interrupts is they can happen anywhere, so the "caller" (the procedure that was interrupted) can't save their registers, and the interrupt has no way to know what registers it should save since it can't know at runtime what it's interrupting.
 the way around this is to know which registers the interrupt will need, and to only save and restore those
 so analyze the interrupt as its own "sub program" (own entry point, own allocation table, etc) - then the values in the allocation table will tell you exactly what hardware locations you need to save and restore, as long as you never touch anything else
 probably a good idea to emit a warning if the interrupt routine uses too many registers
+also emit a warning if the interrupt handler is undefined
  */
 
 #[derive(Debug)]
@@ -355,7 +357,7 @@ logger.error("invalid jump destination", s.pos().clone());
             //println!("{}{} stack is {:?}", self.name, current_id, entry_stack);
             // check for stack underflow
             if entry_stack.len() < current.pops() {
-                logger.error("stack underflow", current.pos().clone());
+                logger.error("stack underflow in block", current.pos().clone());
                 continue;
             }
             // compute exit stack
@@ -637,12 +639,13 @@ pub struct VRegProcedure {
     name: String,
     inputs: Vec<VReg>,
     outputs: Vec<VReg>,
-    instructions: Vec<VRegInstruction>,
+    instructions: Vec<VirtualInstruction>,
     // map registers to their ranges
     live_ranges: HashMap<usize, LiveRange>,
+    pos: FilePos,
 }
 impl VRegProcedure {
-    pub fn instructions(&self) -> &[VRegInstruction] {
+    pub fn instructions(&self) -> &[VirtualInstruction] {
         &self.instructions
     }
 
@@ -662,7 +665,7 @@ impl VRegProcedure {
         self.live_ranges.values().collect()
     }
 
-    pub fn lower(ir_proc: &VirtualProcedure, sig_table: &HashMap<String, (Vec<DType>, Vec<DType>)>) -> Self {
+    pub fn lower(ir_proc: &VirtualProcedure, sig_table: &HashMap<String, (Vec<DType>, Vec<DType>)>, logger: &dyn Logger) -> Self {
         // procedures are lowered block by block
         // block input and output registers are propagated in call order
         // because the language uses implicit fallthroughs and we don't insert jump instructions
@@ -687,12 +690,13 @@ impl VRegProcedure {
              * loop anyway
              *
              * if the virtual instructions allowed in-place register modification then we would
-             * need a more complex algorithm
+             * need a more complex algorithm - but it doesn't so we're happy
              */
             if let Some(range) = range_map.get_mut(&reg.id()) {
                 range.length = 1 + statement_index - range.start;
             }
             else {
+                // the initial length of a live range is always 1, since registers are always live for at least the statement that modifies them
                 range_map.insert(reg.id(), LiveRange::new(reg, statement_index, 1));
             }
         }
@@ -718,7 +722,7 @@ impl VRegProcedure {
         reg_stacks.insert(0, proc_inputs.to_vec());
         let mut todo_ids: VecDeque<usize> = [0].into();
         let mut visited: HashSet<usize> = HashSet::new();
-        let mut block_instrs: HashMap<usize, Vec<VRegInstruction>> = HashMap::new();
+        let mut block_instrs: HashMap<usize, Vec<VirtualInstruction>> = HashMap::new();
 
         while !todo_ids.is_empty() {
             let current_id = todo_ids.pop_back().unwrap();
@@ -726,7 +730,7 @@ impl VRegProcedure {
                 continue;
             }
             visited.insert(current_id);
-            
+
             let mut instructions = vec![];
 
             // get your entry stack
@@ -740,7 +744,7 @@ impl VRegProcedure {
                     StatementPayload::Push { value } => {
                         let dest = allocator.fresh(value.into());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::LoadImm { dest, val: value.clone() });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::LoadImm { dest, val: value.clone() }, s.pos().clone()));
                     }
                     StatementPayload::Pop => {
                         reg_stack.pop();
@@ -763,157 +767,157 @@ impl VRegProcedure {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Add { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Add { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Sub => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Sub { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Sub { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Mult => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Mul { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Mul { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Div => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Div { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Div { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Mod => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Mod { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Mod { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::And => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::And { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::And { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Or => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Or { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Or { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Xor => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Xor { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Xor { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Eq => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Eq { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Eq { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Neq => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Neq { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Neq { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Lt => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Lt { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Lt { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Leq => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Leq { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Leq { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Gt => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Gt { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Gt { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Geq => {
                         let b = reg_stack.pop().unwrap();
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Geq { dest, a, b });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Geq { dest, a, b }, s.pos().clone()));
                     }
                     StatementPayload::Inc => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Inc { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Inc { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Dec => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Dec { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Dec { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Bsl => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Bsl { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Bsl { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Bsr => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Bsr { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Bsr { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Rol => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Rol { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Rol { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Ror => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Ror { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Ror { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Not => {
                         let a = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*a.holds());
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Not { dest, a });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Not { dest, a }, s.pos().clone()));
                     }
                     StatementPayload::Load { kind } => {
                         let addr = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*kind);
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::LoadMem { dest, addr });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::LoadMem { dest, addr }, s.pos().clone()));
                     }
                     StatementPayload::Store { kind: _ } => {
                         let src = reg_stack.pop().unwrap();
                         let addr = reg_stack.pop().unwrap();
-                        instructions.push(VRegInstruction::Store { addr, src });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Store { addr, src }, s.pos().clone()));
                     }
                     StatementPayload::Cast { to } => {
                         let src = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*to);
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Cast { dest, src, to: *to });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Cast { dest, src, to: *to }, s.pos().clone()));
                     }
                     StatementPayload::Conv { to } => {
                         // we don't really need to emit an instruction here, but emitting one is
@@ -923,7 +927,7 @@ impl VRegProcedure {
                         let src = reg_stack.pop().unwrap();
                         let dest = allocator.fresh(*to);
                         reg_stack.push(dest);
-                        instructions.push(VRegInstruction::Move { dest, src })
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Move { dest, src }, s.pos().clone()))
                     }
                     StatementPayload::Call { dest } => {
                         // get call info from the table
@@ -942,25 +946,25 @@ impl VRegProcedure {
                             output_regs.push(or);
                         }
                         // emit the call
-                        instructions.push(VRegInstruction::Call { dest: dest.clone(), inputs: input_regs, outputs: output_regs });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Call { dest: dest.clone(), inputs: input_regs, outputs: output_regs }, s.pos().clone()));
                     }
                     StatementPayload::Jumpif { dest } => {
                         let cmp = reg_stack.pop().unwrap();
-                        instructions.push(VRegInstruction::Jumpif { dest: dest.clone(), cmp });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Jumpif { dest: dest.clone(), cmp }, s.pos().clone()));
                     }
                     StatementPayload::Jump { dest } => {
-                        instructions.push(VRegInstruction::Jump { dest: dest.clone() });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Jump { dest: dest.clone() }, s.pos().clone()));
                     }
                     StatementPayload::Label { name } => {
-                        instructions.push(VRegInstruction::Label { name: name.clone() });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Label { name: name.clone() }, s.pos().clone()));
                     }
                     StatementPayload::Ret => {
                         // move things into the return registers
                         for (slot, from) in proc_outputs.iter().rev().zip(reg_stack.iter().rev()) {
-                            instructions.push(VRegInstruction::Move { dest: *slot, src: *from });
+                            instructions.push(VirtualInstruction::new(InstructionPayload::Move { dest: *slot, src: *from }, s.pos().clone()));
                         }
                         // then return from the stack
-                        instructions.push(VRegInstruction::Ret { regs: proc_outputs.clone() });
+                        instructions.push(VirtualInstruction::new(InstructionPayload::Ret { regs: proc_outputs.clone() }, s.pos().clone()));
                     }
                     _ => unimplemented!()
                 };
@@ -972,14 +976,17 @@ impl VRegProcedure {
                 // stack into their stack
                 // order doesn't matter because stacks are the same (guaranteed by typechecking
                 // pass)
+                // succ_regs is the entry stack that the next block expects
                 if let Some(succ_regs) = reg_stacks.get(succ_id) {
-                    assert_eq!(reg_stack.len(), succ_regs.len());
+                    assert_eq!(reg_stack.len(), succ_regs.len()); // sanity check for same length
                     for (mine, theirs) in reg_stack.iter().zip(succ_regs.iter()) {
-                        assert_eq!(mine.holds(), theirs.holds());
+                        assert_eq!(mine.holds(), theirs.holds()); // sanity check for holding same type
                         // only move if the registers are different - if the registers are the same
                         // they must hold the same value
+                        // for file pos, grab the position of the last instruction (the tail of the block)
+                        let pos = instructions[instructions.len() - 1].pos().clone();
                         if mine.id() != theirs.id() {
-                            instructions.push(VRegInstruction::Move { dest: *theirs, src: *mine });
+                            instructions.push(VirtualInstruction::new(InstructionPayload::Move { dest: *theirs, src: *mine }, pos));
                         }
                     }
                 }
@@ -1003,7 +1010,7 @@ impl VRegProcedure {
         for block_id in 0..ir_proc.blocks().len() {
             if let Some(instrs) = block_instrs.remove(&block_id) {
                 for instruction in instrs {
-                    for reg in instruction.registers() {
+                    for reg in instruction.payload().registers() {
                         update_live_range(&mut ranges, reg, global_inst_i);
                     }
                     instructions.push(instruction);
@@ -1015,7 +1022,7 @@ impl VRegProcedure {
             }
         }
 
-        VRegProcedure { name: ir_proc.name().clone(), inputs: proc_inputs, outputs: proc_outputs, instructions, live_ranges: ranges }
+        VRegProcedure { name: ir_proc.name().clone(), inputs: proc_inputs, outputs: proc_outputs, instructions, live_ranges: ranges, pos: ir_proc.pos.clone() }
     }
 }
 impl Display for VRegProcedure {
@@ -1030,12 +1037,23 @@ impl Display for VRegProcedure {
             write!(f, " {}", ir)?;
         }
         for (ii, i) in self.instructions.iter().enumerate() {
-            write!(f, "\n    {}: {:?}", ii, i)?;
+            write!(f, "\n    {}: {:?}", ii, i.payload())?;
         }
         write!(f, "\n  live ranges:")?;
         for (_, range) in self.live_ranges.iter() {
             write!(f, "\n  {}: start {}, length {}", range.register, range.start, range.length)?;
         }
         Ok(())
+    }
+}
+impl Positionable for VRegProcedure {
+    fn pos(&self) -> &FilePos {
+        &self.pos
+    }
+    fn line(&self) -> usize {
+        self.pos.line
+    }
+    fn col(&self) -> usize {
+        self.pos.col
     }
 }
