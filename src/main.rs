@@ -1,25 +1,26 @@
 use yasl::datastructures::program::VRegProgram;
 use yasl::datastructures::program::VirtualProgram;
-use yasl::logger;
-use yasl::logger::Logger;
+use yasl::logger::{Logger, StdoutLogger};
 use yasl::target::Target;
-use yasl::target::mos6502::MOS6502Target;
-use yasl::target::lin_alloc;
+use yasl::target::mos6502::{MOS6502Target};
+use yasl::target::x86_64::{X86_64Target};
 use yasl::tokenizer;
 use yasl::parser;
 use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use yasl::util::{FilePos, Positionable};
 
 fn main() {
     println!("This is yasl {}", env!("CARGO_PKG_VERSION"));
 
-    let mut logger = logger::StdoutLogger::new();
+    let mut logger = StdoutLogger::new();
 
     let args: Vec<String> = env::args().collect();
 
     let src_path = std::path::Path::new(&args[1]);
+    let src_path_str = src_path.to_str().unwrap();
     let src_string = match fs::read_to_string(src_path) {
         Ok(s) => s,
         Err(err) => {
@@ -43,7 +44,7 @@ fn main() {
     }
 
     // build the procedure table and derive a signature table from it
-    let mut ir_program = VirtualProgram::new(parser.statements(), &mut logger);
+    let mut ir_program = VirtualProgram::new(src_path_str, parser.statements(), &mut logger);
     let sig_table = ir_program.sig_table();
 
     // for every procedure, link the blocks and build the jump table
@@ -62,50 +63,34 @@ fn main() {
         return;
     }
 
-    // now the program is correct
-    // the compiler can throw no more errors, the only things that can go wrong from here on out
-    // are internal and cause crashes
-    // first we lower the program to infinite virtual registers
-    let vreg_program = VRegProgram::lower(&ir_program);
+    // lower the program to virtual register form
+    // in theory nothing can go wrong here
+    let vreg_program = VRegProgram::lower(src_path_str, &ir_program, &logger);
     println!("{}", vreg_program);
 
-    // then we select our target and do register allocation and instruction selection based on that
-    // get linear scan working first, then maybe worry about graph coloring
-    // we want to target: x86_64 (64 bit) x86 (32 bit) 6502 (8 bit)
-    // probably do the 6502 first, because it is the simplest
-    // targets own their allocators and their emitters
-
-    // linear scan allocation
-    // within a procedure, determine live ranges of your registers
-    // a register goes live when it is first used and goes dead when it is last used
-    // registers which have overlapping live ranges will need to be spilled
-    // careful - registers used in loops are live for the whole loop (from the label to the jump)
-    // plus any use points after the jump
-    
-    // 6502
-    // we are targeting bare metal 6502
-    // accumulator (A)
-    // in many cases operations can be performed directly on the accumulator
-    // pretty much everything runs through A
-    // X and Y are really only useful for indexing
-    // the stack is tiny. only use it for jsr/rts and pha/pla
-    // your accumulator is only 8 bits. everything will need to be spilled.
-    // the hardware stack is at $0100 to $01ff, zero page is $0000-$00ff and is very fast. but
-    // limited.
-    // if things are in zero page they can also be used for indirect addressing
-    // prioritize allocating zero page to pointers
-    // our magic infinite registers are almost all wider than 8 bits.
-    // map virtual registers to real locations, which have an address (u16) and a width (u8), both
-    // in bytes
-    //
-    // first step: map virtual registers to real locations
-    //
-    //let main_reg_map = lin_alloc::<MOS6502Target>(vreg_program.proc_table().get("loop_test").unwrap());
-    //println!("{:#?}\n", main_reg_map);
-
-    if let Ok(bin) = MOS6502Target::emit(&vreg_program) {
-        let mut file = File::create("./out.bin").unwrap();
-        file.write_all(&*bin);
+    // select target
+    let target_str = "6502";
+    let mut bytes = vec![];
+    // the pipeline for targets is basically all the same, but because target types can't be known at compile time we need this big match statement
+    match target_str {
+        "6502" => {
+            let alloc_map = MOS6502Target::build_alloc_map(&vreg_program, &mut logger);
+            let trap_locs = MOS6502Target::build_trap_set(&vreg_program, &alloc_map, 64, &mut logger);
+            println!("{:#?}", trap_locs);
+            bytes = MOS6502Target::emit(&vreg_program, &alloc_map, &trap_locs, &mut logger);
+        }
+        "x86_64" => {
+            todo!()
+        }
+        _ => {
+            panic!("specify a target string")
+        }
+    }
+    if let Ok(mut file) = File::create("./out.bin") {
+        file.write_all(&*bytes);
+    }
+    else {
+        panic!("unable to create output file");
     }
     println!("done");
 }
