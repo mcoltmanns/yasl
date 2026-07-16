@@ -134,7 +134,6 @@ impl Parser {
                                 return;
                             }
                         };
-                        self.tokens.next();
                     }
                     _ => {
                         // if it isn't a name, try to parse a datatype
@@ -174,6 +173,7 @@ impl Parser {
 
             TokenPayload::Store => {
                 let type_t = self.tokens.next().unwrap();
+                println!("{}", type_t);
                 match DType::from_token(&type_t) {
                     Err(s) => {
                         logger.error(&s, type_t.pos().clone());
