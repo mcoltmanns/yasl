@@ -5,14 +5,15 @@ use std::fmt::Display;
 
 pub struct VirtualProgram {
     proc_table: HashMap<String, VirtualProcedure>,
-    // map procedure names to the list of procedure names they call
-    x_calls_y: HashMap<String, Vec<String>>
+    // map procedure names to the list of procedure names they call (call graph) (basically an adjacency list)
+    x_calls_y: HashMap<String, Vec<String>>,
+    // name of the program
+    name: String,
 }
 impl VirtualProgram {
     /// Constructs an IR program from a series of statements.
     /// This builds the procedure table and fills it with procedures.
-    /// TODO it also builds the procedure link table/call graph
-    pub fn new(statements: &[VirtualStatement], logger: &mut dyn Logger) -> Self {
+    pub fn new(name: &str, statements: &[VirtualStatement], logger: &mut dyn Logger) -> Self {
         let mut proc_table = HashMap::new();
         let mut x_calls_y = HashMap::new();
 
@@ -36,14 +37,25 @@ impl VirtualProgram {
                     }
                     // start a new procedure
                     current_proc = Some(VirtualProcedure::empty(name.clone(), t_in.clone(), t_out.clone(), s.pos().clone()));
+                    // insert it into the call graph (with an empty call list)
+                    x_calls_y.insert(name.clone(), vec![]);
                 }
                 _ => {
                     match &current_proc {
+                        // inside a procedure
                         Some(proc) => {
+                            // push back the current statement
                             current_statements.push(s.clone());
+                            // if it's a call, update the call graph
                             if let StatementPayload::Call { dest } = s.payload() {
-                                if x_calls_y.get(proc.name()).is_some_and(|callees_list: &Vec<String> | { callees_list.contains(&dest) }) {
-                                    // TODO build call graph??!
+                                if x_calls_y.get(proc.name()).is_some_and(|callees_list: &Vec<String> | { !callees_list.contains(&dest) }) {
+                                    // if the current procedure has an entry in the call graph and the list of things it calls does not contain the name of this call statement
+                                    // add the name this call references to the list of things this procedure calls
+                                    x_calls_y.get_mut(proc.name()).map(|vec| vec.push(dest.clone()));
+                                }
+                                else if x_calls_y.get(proc.name()).is_none() {
+                                    // if the current procedure doesn't have an entry in the call graph initiate a new list containing only the destination name
+                                    x_calls_y.insert(proc.name().clone(), vec![dest.clone()]);
                                 }
                             }
                         }
@@ -63,11 +75,20 @@ impl VirtualProgram {
             proc_table.insert(prev_proc.name().clone(), prev_proc);
         }
 
+        // check that the entry point is defined
         if !proc_table.contains_key("main") {
             logger.error("no main procedure defined", FilePos::new("", 0, 0));
         }
+        // check that the interrupt handler is defined
+        if !proc_table.contains_key("trapper") {
+            logger.warning("no interrupt handler defined", FilePos { name: name.to_string(), line: 0, col: 0 })
+        }
+        // if it is, make sure it has no arguments or outputs
+        else if proc_table["trapper"].types_in().len() > 0 || proc_table["trapper"].types_out().len() > 0 {
+            logger.error("interrupt handler must be zero-effect (cannot have arguments or return values)", proc_table["trapper"].statements()[0].pos().clone())
+        }
 
-        VirtualProgram { proc_table, x_calls_y }
+        VirtualProgram { name: name.parse().unwrap(), proc_table, x_calls_y }
     }
 
     pub fn sig_table(&self) -> HashMap<String, (Vec<DType>, Vec<DType>)> {
@@ -80,6 +101,8 @@ impl VirtualProgram {
         &self.proc_table
     }
 
+    pub fn call_graph(&self) -> &HashMap<String, Vec<String>> { &self.x_calls_y }
+
     pub fn procedures_mut(&mut self) -> ValuesMut<'_, String, VirtualProcedure> {
         self.proc_table.values_mut()
     }
@@ -91,6 +114,8 @@ impl VirtualProgram {
     pub fn get_mut_proc(&mut self, name: &str) -> Option<&mut VirtualProcedure> {
         self.proc_table.get_mut(name)
     }
+
+    pub fn name(&self) -> &String { &self.name }
 }
 impl Display for VirtualProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -104,24 +129,30 @@ impl Display for VirtualProgram {
 
 pub struct VRegProgram {
     proc_table: HashMap<String, VRegProcedure>,
+    call_graph: HashMap<String, Vec<String>>,
+    name: String,
 }
 impl VRegProgram {
     // lower an ir program to an infinite register format program
     // register ids are local to program procedures
     // also determines live ranges of registers within procedures
-    pub fn lower(ir_program: &VirtualProgram) -> Self {
+    pub fn lower(name: &str, ir_program: &VirtualProgram, logger: &dyn Logger) -> Self {
         let mut reg_proc_table: HashMap<String, VRegProcedure> = HashMap::new();
         let sig_table = &ir_program.sig_table();
         for (name, proc) in ir_program.proc_table() {
-            let reg_proc = VRegProcedure::lower(proc, sig_table);
+            let reg_proc = VRegProcedure::lower(proc, sig_table, logger);
             reg_proc_table.insert(name.clone(), reg_proc);
         }
-        VRegProgram { proc_table: reg_proc_table }
+        VRegProgram { name: name.to_string(), proc_table: reg_proc_table, call_graph: ir_program.call_graph().clone() }
     }
 
     pub fn proc_table(&self) -> &HashMap<String, VRegProcedure> {
         &self.proc_table
     }
+
+    pub fn name(&self) -> &String { &self.name }
+    
+    pub fn call_graph(&self) -> &HashMap<String, Vec<String>> { &self.call_graph }
 }
 impl Display for VRegProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
