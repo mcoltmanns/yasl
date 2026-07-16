@@ -1,10 +1,12 @@
 mod codegen;
 
+use std::collections::HashMap;
 use std::iter::zip;
 use crate::datastructures::statement::InstructionPayload;
 use crate::logger::Logger;
 use crate::target::{AllocMap, DType, TrapSet};
 use crate::target::allocators::lin_alloc;
+use crate::target::mos6502::codegen::load_acc;
 use crate::target::Target;
 use crate::util::Positionable;
 
@@ -47,7 +49,7 @@ pub enum MOS6502Instruction {
     LDY(u8),
     BCS(u8),
     CPY(u8),
-    BNE(u8),
+    BNE(i8),
     CPX(u8),
     BEQ(i8),
     ORAX(u8),
@@ -202,7 +204,7 @@ impl MOS6502Instruction {
             MOS6502Instruction::LDY(arg) => vec![0xa0, *arg],
             MOS6502Instruction::BCS(arg) => vec![0xb0, *arg],
             MOS6502Instruction::CPY(arg) => vec![0xc0, *arg],
-            MOS6502Instruction::BNE(arg) => vec![0xd0, *arg],
+            MOS6502Instruction::BNE(arg) => vec![0xd0, arg.cast_unsigned()],
             MOS6502Instruction::CPX(arg) => vec![0xe0, *arg],
             MOS6502Instruction::BEQ(arg) => vec![0xf0, arg.cast_unsigned()], // write the i8 as its byte representation
             MOS6502Instruction::ORAX(arg) => vec![0x01, *arg],
@@ -543,6 +545,13 @@ impl Target for MOS6502Target {
         // where we're emitting to right now
         let mut curr_emit_addr = MOS6502Target::PROG_START_DEFAULT;
 
+        // address table for program labels (procedures and labels in same table)
+        let mut addr_table = HashMap::new();
+        // map addresses of jump instructions to the labels they need to be filled with
+        let mut jumps_to_fill: HashMap<u16, &String> = HashMap::new();
+        // same thing but for calls
+        let mut calls_to_fill: HashMap<u16, &String> = HashMap::new();
+
         // now the target is pretty much ready to go
         // we go procedure by procedure and write instructions
         for (proc_name, vreg_proc) in program.proc_table() {
@@ -560,10 +569,10 @@ impl Target for MOS6502Target {
                 system_rom[0xfffe] = curr_emit_addr.to_le_bytes()[0];
                 system_rom[0xffff] = curr_emit_addr.to_le_bytes()[1];
             }
-            
-            let mut write_bytes = | bytes: &[u8] | {
-                system_rom[curr_emit_addr as usize..curr_emit_addr as usize + bytes.len()].copy_from_slice(bytes);
-                curr_emit_addr += bytes.len() as u16;
+
+            let mut write_bytes = | bytes: &[u8], addr: &mut u16 | {
+                system_rom[*addr as usize..*addr as usize + bytes.len()].copy_from_slice(bytes);
+                *addr += bytes.len() as u16;
             };
 
             for instruction in vreg_proc.instructions() {
@@ -588,10 +597,10 @@ impl Target for MOS6502Target {
                         let dloc = allocation.get(dest).unwrap();
                         // loading immediate values happens as a byte loop
                         for (location, byte) in zip(dloc, val.as_bytes()) {
-                            write_bytes(&codegen::store_byte(location, byte));
+                            write_bytes(&codegen::store_byte(location, byte), &mut curr_emit_addr);
                         }
                     }
-                    // load a register from RAM or ROM
+                    // load a register from some address (can be RAM or ROM, cpu doesn't care, it just reads whatever's on the data lines)
                     // here addr holds a pointer to some value, and dest is the place we want to move that value to
                     // dest/the value to load may be more than one byte
                     InstructionPayload::LoadMem { dest, addr } => {
@@ -600,19 +609,19 @@ impl Target for MOS6502Target {
                         assert_eq!(addr_bytes.len(), 2); // sanity check (should be enforced by allocator)
                         // write the pointer to the indirection register
                         for i in 0..2 {
-                            write_bytes(&codegen::load_acc(&addr_bytes[i]));
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes())
+                            write_bytes(&codegen::load_acc(&addr_bytes[i]), &mut curr_emit_addr);
+                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes(), &mut curr_emit_addr)
                         }
                         // clear y register
-                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes());
+                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes(), &mut curr_emit_addr);
                         // now we can index through y, incrementing each time
                         for dloc in dlocs {
                             // load a with *((ind_lo) + y) (the current byte of what's at the pointer)
-                            write_bytes(&mut MOS6502Instruction::LDAY(Self::IND_LO).to_bytes());
+                            write_bytes(&mut MOS6502Instruction::LDAY(Self::IND_LO).to_bytes(), &mut curr_emit_addr);
                             // store the byte
-                            write_bytes(&codegen::store_acc(dloc));
+                            write_bytes(&codegen::store_acc(dloc), &mut curr_emit_addr);
                             // increment y
-                            write_bytes(&mut MOS6502Instruction::INY.to_bytes());
+                            write_bytes(&mut MOS6502Instruction::INY.to_bytes(), &mut curr_emit_addr);
                         }
                     }
                     // move a value between two locations in RAM
@@ -622,9 +631,9 @@ impl Target for MOS6502Target {
                         let slocs = allocation.get(src).unwrap();
                         for (dloc, sloc) in zip(dlocs, slocs) {
                             // load a with whatever was at the start register
-                            write_bytes(&codegen::load_acc(sloc));
+                            write_bytes(&codegen::load_acc(sloc), &mut curr_emit_addr);
                             // write it to the destination
-                            write_bytes(&codegen::store_acc(dloc));
+                            write_bytes(&codegen::store_acc(dloc), &mut curr_emit_addr);
                         }
                     }
                     // here src holds some value, and addr holds a pointer that we want to write that value to
@@ -633,23 +642,23 @@ impl Target for MOS6502Target {
                         let addr_bytes = allocation.get(addr).unwrap();
                         let slocs = allocation.get(src).unwrap();
                         assert_eq!(addr_bytes.len(), 2);
-                        // TODO this is only the easy case! when writing to addresses outside of RAM (pointer > $5fff), you will have to check device status and only write when ready for the next byte.
-                        // TODO some eeproms allow block writing
+                        // TODO add a warning in the manual that this is only meant for storing values to RAM
+                        // TODO devices and ROM will need to have interrupt-based user routines written for them
                         // write pointer to indirection register
                         for i in 0..2 {
-                            write_bytes(&codegen::load_acc(&addr_bytes[i]));
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes());
+                            write_bytes(&codegen::load_acc(&addr_bytes[i]), &mut curr_emit_addr);
+                            write_bytes(&mut MOS6502Instruction::STAZ(Self::IND_LO + i as u8).to_bytes(), &mut curr_emit_addr);
                         }
                         // clear y register
-                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes());
+                        write_bytes(&mut MOS6502Instruction::LDY(0).to_bytes(), &mut curr_emit_addr);
                         // now we can index through y, incrementing each time
                         for sloc in slocs {
                             // load a with what's at the source
-                            write_bytes(&codegen::load_acc(sloc));
+                            write_bytes(&codegen::load_acc(sloc), &mut curr_emit_addr);
                             // store a at ind+y
-                            write_bytes(&mut MOS6502Instruction::STAY(Self::IND_LO).to_bytes());
+                            write_bytes(&mut MOS6502Instruction::STAY(Self::IND_LO).to_bytes(), &mut curr_emit_addr);
                             // increment y
-                            write_bytes(&mut MOS6502Instruction::INY.to_bytes());
+                            write_bytes(&mut MOS6502Instruction::INY.to_bytes(), &mut curr_emit_addr);
                         }
                     }
 
@@ -658,28 +667,76 @@ impl Target for MOS6502Target {
                     //    // casting is a lot of work
                     //}
 
-                    // math stuff
+                    // LABELS AND JUMPS
+                    InstructionPayload::Label { name } => {
+                        // labels don't generate any code, instead we add an entry to the jump table
+                        addr_table.insert(name, curr_emit_addr);
+                    }
+                    InstructionPayload::Jump { dest } => {
+                        // indiscriminate jump, can be forward or backward
+                        // remember that we have to fill this jump
+                        jumps_to_fill.insert(curr_emit_addr, dest);
+                        // emit the jump, with a dummy vector of 0 for now
+                        write_bytes(&mut MOS6502Instruction::JMP(0).to_bytes(), &mut curr_emit_addr);
+                    }
+                    InstructionPayload::Jumpif { dest, cmp} => {
+                        let clocs = allocation.get(cmp).unwrap();
+                        // cmp_locs is guaranteed to hold a whole type, so zero will always be all bits 0
+                        // so if all the bytes in cmp_loc are 0 we're ok
+                        // zero accumulator
+                        write_bytes(&mut MOS6502Instruction::LDA(0).to_bytes(), &mut curr_emit_addr);
+                        // then for each byte in the comparison locations, ora
+                        for cloc in clocs {
+                            // same idea as in codegen::load_acc
+                            match cloc {
+                                MOS6502Location::FrameSpill(i) => {
+                                    // if it's a spill, do the operation indexed through y
+                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
+                                    write_bytes(&mut MOS6502Instruction::ORAY(MOS6502Target::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                                }
+                                MOS6502Location::RegisterPool(i) => {
+                                    // if it's not, do the or in zero page
+                                    write_bytes(&mut MOS6502Instruction::ORAZ(*i).to_bytes(), &mut curr_emit_addr);
+                                }
+                            }
+                        }
+                        // now if any byte is not zero (zero flag is clear), jump
+                        // because jump vectors are absolute and we want to support long jumps, we emit a BNE that skips over a JMP
+                        // so the idea is if zero flag set (BEQ), skip the jump
+                        // otherwise fall through to the jump
+                        // the offset for branch instructions is the number of bytes to skip after the branch instruction has been read
+                        // a JMP is always 3 bytes long
+                        write_bytes(&mut MOS6502Instruction::BEQ(3).to_bytes(), &mut curr_emit_addr);
+                        // remember we have to fill the jump
+                        jumps_to_fill.insert(curr_emit_addr, dest);
+                        write_bytes(&mut MOS6502Instruction::JMP(0).to_bytes(), &mut curr_emit_addr);
+                        // this is just a simple jumpif, so there's no need to jump to a later block or anything
+                    }
+
+                    // CALL AND RETURN
+
+                    // MATH
                     InstructionPayload::Add { dest, a, b } => {
                         let dlocs = allocation.get(dest).unwrap();
                         let alocs = allocation.get(a).unwrap();
                         let blocs = allocation.get(b).unwrap();
                         if dest.holds().is_integer() {
                             // first clear the carry flag
-                            write_bytes(&MOS6502Instruction::CLC.to_bytes());
+                            write_bytes(&MOS6502Instruction::CLC.to_bytes(), &mut curr_emit_addr);
                             // then for each a-b-d pair, perform the addition
                             // carry flag is considered
                             for (dloc, (aloc, bloc)) in zip(dlocs, zip(alocs, blocs)) {
-                                write_bytes(&codegen::add_whole(dloc, aloc, bloc))
+                                write_bytes(&codegen::add_whole(dloc, aloc, bloc), &mut curr_emit_addr)
                             }
                         }
                         else {
                             // unpack the floats to the float scratch registers
-                            write_bytes(&codegen::unpack_float(alocs, 0));
-                            write_bytes(&codegen::unpack_float(blocs, 1));
+                            write_bytes(&codegen::unpack_float(alocs, 0), &mut curr_emit_addr);
+                            write_bytes(&codegen::unpack_float(blocs, 1), &mut curr_emit_addr);
                             // bla bla bla, do float addition
                             // repack the floats
-                            write_bytes(&codegen::pack_float(alocs, 0));
-                            write_bytes(&codegen::pack_float(blocs, 1));
+                            write_bytes(&codegen::pack_float(alocs, 0), &mut curr_emit_addr);
+                            write_bytes(&codegen::pack_float(blocs, 1), &mut curr_emit_addr);
                         }
                     }
                     InstructionPayload::Sub { dest, a, b } => {
@@ -688,10 +745,10 @@ impl Target for MOS6502Target {
                         let alocs = allocation.get(a).unwrap();
                         let blocs = allocation.get(b).unwrap();
                         // for subtraction you have to set carry
-                        write_bytes(&MOS6502Instruction::SEC.to_bytes());
+                        write_bytes(&MOS6502Instruction::SEC.to_bytes(), &mut curr_emit_addr);
                         // then for each a-b-d pair, subtract (considering carry)
                         for (dloc, (aloc, bloc)) in zip(dlocs, zip(alocs, blocs)) {
-                            write_bytes(&codegen::sub_whole(dloc, aloc, bloc))
+                            write_bytes(&codegen::sub_whole(dloc, aloc, bloc), &mut curr_emit_addr);
                         }
                     }
                     InstructionPayload::Mul { dest, a, b } => {
@@ -704,6 +761,18 @@ impl Target for MOS6502Target {
                 }
             }
         }
+
+        // once we're done, we can finish filling out our jumps
+        // all of these jumps are absolute and support long jumps
+        for (inst_addr, dest_name) in jumps_to_fill {
+            // inst_addr is always the address of the first byte of the complete jump instruction
+            // so inst_addr + 1 is small byte of the destination
+            // inst_addr + 2 is the large byte of the destination
+            let dest_addr_bytes = addr_table.get(&dest_name).unwrap().to_le_bytes();
+            system_rom[inst_addr as usize + 1] = dest_addr_bytes[0];
+            system_rom[inst_addr as usize + 2] = dest_addr_bytes[1];
+        }
+
         system_rom
     }
 }
