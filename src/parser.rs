@@ -284,8 +284,8 @@ impl Parser {
                 logger.error(&format!("unknown token \"{:?}\"", s), t.pos().clone());
             },
 
-            _ => {
-                logger.error("unimplemented token", t.pos().clone());
+            other => {
+                logger.error(&format!("unexpected or reserved token {:?}", other), t.pos().clone());
             }
         };
     }
