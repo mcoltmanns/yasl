@@ -1,12 +1,14 @@
 mod codegen;
 
 use std::iter::zip;
-use std::slice::SliceIndex;
-use crate::datastructures::statement::VRegInstruction;
-use crate::target::{lin_alloc, DType};
+use crate::datastructures::statement::InstructionPayload;
+use crate::logger::Logger;
+use crate::target::{AllocMap, DType, TrapSet};
+use crate::target::allocators::lin_alloc;
 use crate::target::Target;
+use crate::util::Positionable;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum MOS6502Location {
     RegisterPool(u8),
     FrameSpill(u8),
@@ -426,7 +428,7 @@ impl MOS6502Target {
 impl Target for MOS6502Target {
     type Location = MOS6502Location;
 
-    fn init() -> Self {
+    fn init_for_alloc() -> Self {
         MOS6502Target { 
             free_registers: 0xffffffffffffffff,
             free_spill: vec![],
@@ -434,16 +436,7 @@ impl Target for MOS6502Target {
         }
     }
 
-    fn locs_needed(dtype: DType) -> usize {
-        match dtype {
-            DType::I8 | DType::U8 => 1,
-            DType::I16 | DType::U16 | DType::F16 | DType::Pointer => 2,
-            DType::I32 | DType::U32 | DType::F32 => 4,
-            DType::I64 | DType::U64 | DType::F64 => 8,
-        }
-    }
-
-    fn alloc(&mut self, needed: usize) -> Result<Vec<Self::Location>, String> {
+    fn alloc_n_locs(&mut self, needed: usize) -> Result<Vec<Self::Location>, String> {
         // if we don't need any space, return an empty location vector
         if needed == 0 {
             return Ok(vec![]);
@@ -495,7 +488,45 @@ impl Target for MOS6502Target {
         Ok((start..start + needed).map(MOS6502Location::FrameSpill).collect())
     }
 
-    fn emit(program: &crate::datastructures::program::VRegProgram) -> Result<Vec<u8>, String> {
+    fn free_locs(&mut self, locs: Vec<Self::Location>) {
+        // free all the locations depending on what they are
+        for loc in locs.iter() {
+            match loc {
+                MOS6502Location::RegisterPool(i) => {
+                    let mask = ((1u64 << 1) - 1) << i;
+                    self.free_registers |= mask;
+                }
+                MOS6502Location::FrameSpill(i) => {
+                    self.free_spill.push((*i, 1))
+                }
+            }
+        }
+        // because this method of freeing results in a bunch of tiny free blocks, we have to
+        // coalesce free blocks afterwards
+        self.free_spill.sort_by_key(|block| block.0);
+        let mut merged: Vec<(u8, u8)> = Vec::new();
+        for block in &self.free_spill {
+            // look at the last block we merged. if it ends where we start, extend it by our length
+            if let Some(last) = merged.last_mut() && last.0 + last.1 == block.0 {
+                last.1 += block.1;
+                continue;
+            }
+            // otherwise add to the merged list
+            merged.push(*block);
+        }
+        self.free_spill = merged;
+    }
+
+    fn locs_needed(dtype: DType) -> usize {
+        match dtype {
+            DType::I8 | DType::U8 => 1,
+            DType::I16 | DType::U16 | DType::F16 | DType::Pointer => 2,
+            DType::I32 | DType::U32 | DType::F32 => 4,
+            DType::I64 | DType::U64 | DType::F64 => 8,
+        }
+    }
+
+    fn emit(program: &crate::datastructures::program::VRegProgram, global_allocs: &AllocMap<Self::Location>, trap_set: &TrapSet<Self::Location>, logger: &mut dyn Logger) -> Vec<u8> {
         // emit a program
         // emit more or less in source order
         // we want to emit binary, not assembly
@@ -515,8 +546,7 @@ impl Target for MOS6502Target {
         // now the target is pretty much ready to go
         // we go procedure by procedure and write instructions
         for (proc_name, vreg_proc) in program.proc_table() {
-            // first we allocate for the procedure
-            let allocation = lin_alloc::<MOS6502Target>(vreg_proc)?;
+            let allocation = &global_allocs[proc_name];
 
             println!("{}", proc_name);
 
@@ -526,7 +556,7 @@ impl Target for MOS6502Target {
                 system_rom[0xfffd] = curr_emit_addr.to_le_bytes()[1];
             }
             // if the procedure is the interrupt handler, write the reset vector
-            if proc_name == "interrupt" {
+            if proc_name == "trapper" {
                 system_rom[0xfffe] = curr_emit_addr.to_le_bytes()[0];
                 system_rom[0xffff] = curr_emit_addr.to_le_bytes()[1];
             }
@@ -537,11 +567,11 @@ impl Target for MOS6502Target {
             };
 
             for instruction in vreg_proc.instructions() {
-                println!("\t{:?}", instruction);
-                match instruction {
+                println!("\t{:?}", instruction.payload());
+                match instruction.payload() {
                     // MEMORY CONTROL
                     // load a literal into memory
-                    VRegInstruction::LoadImm { dest, val } => {
+                    InstructionPayload::LoadImm { dest, val } => {
                         // pointers are target-dependent, so we have to do pointer bounds checking here
                         // it's guaranteed to be non-negative since it's a u64, so we just have to check the upper bounds
                         if *dest.holds() == DType::Pointer {
@@ -551,8 +581,7 @@ impl Target for MOS6502Target {
                             assert!(ptr_bytes.len() > 2); // sanity check
                             let fits = ptr_bytes[2..].iter().all(|&x| x == 0);
                             if !fits {
-                                // TODO instead of panicking here, you need to make VRegInstruction a positionable struct and integrate the target into the usual error-reporting framework
-                                panic!("pointer too large for target address space");
+                                logger.error("pointer too large for target address space", instruction.pos().clone());
                             }
                         }
                         // look up the destination location
@@ -565,7 +594,7 @@ impl Target for MOS6502Target {
                     // load a register from RAM or ROM
                     // here addr holds a pointer to some value, and dest is the place we want to move that value to
                     // dest/the value to load may be more than one byte
-                    VRegInstruction::LoadMem { dest, addr } => {
+                    InstructionPayload::LoadMem { dest, addr } => {
                         let addr_bytes = allocation.get(addr).unwrap();
                         let dlocs = allocation.get(dest).unwrap();
                         assert_eq!(addr_bytes.len(), 2); // sanity check (should be enforced by allocator)
@@ -587,7 +616,7 @@ impl Target for MOS6502Target {
                         }
                     }
                     // move a value between two locations in RAM
-                    VRegInstruction::Move { dest, src } => {
+                    InstructionPayload::Move { dest, src } => {
                         // move is pretty easy, just load to accumulator/store to memory
                         let dlocs = allocation.get(dest).unwrap();
                         let slocs = allocation.get(src).unwrap();
@@ -600,7 +629,7 @@ impl Target for MOS6502Target {
                     }
                     // here src holds some value, and addr holds a pointer that we want to write that value to
                     // basically the reverse of loadmem
-                    VRegInstruction::Store { addr, src } => {
+                    InstructionPayload::Store { addr, src } => {
                         let addr_bytes = allocation.get(addr).unwrap();
                         let slocs = allocation.get(src).unwrap();
                         assert_eq!(addr_bytes.len(), 2);
@@ -630,7 +659,7 @@ impl Target for MOS6502Target {
                     //}
 
                     // math stuff
-                    VRegInstruction::Add { dest, a, b } => {
+                    InstructionPayload::Add { dest, a, b } => {
                         let dlocs = allocation.get(dest).unwrap();
                         let alocs = allocation.get(a).unwrap();
                         let blocs = allocation.get(b).unwrap();
@@ -653,7 +682,7 @@ impl Target for MOS6502Target {
                             write_bytes(&codegen::pack_float(blocs, 1));
                         }
                     }
-                    VRegInstruction::Sub { dest, a, b } => {
+                    InstructionPayload::Sub { dest, a, b } => {
                         // subtraction is the same idea as addition, but we use SBC
                         let dlocs = allocation.get(dest).unwrap();
                         let alocs = allocation.get(a).unwrap();
@@ -665,46 +694,17 @@ impl Target for MOS6502Target {
                             write_bytes(&codegen::sub_whole(dloc, aloc, bloc))
                         }
                     }
-                    VRegInstruction::Mul { dest, a, b } => {
+                    InstructionPayload::Mul { dest, a, b } => {
                         // multiplication is a little harder
                         // we don't know what our registers contain, so we can't really make use of any fancy multiplication tricks (all of the stuff we know at compile time was handled already anyway)
                         // so we just do booth's
                     }
 
-                    _ => println!("\tunimplemented instruction: {:?}", instruction)
+                    _ => println!("\tunimplemented instruction: {:?}", instruction.payload())
                 }
             }
         }
-        Ok(system_rom)
-    }
-
-    fn free(&mut self, locs: Vec<Self::Location>) {
-        // free all the locations depending on what they are
-        for loc in locs.iter() {
-            match loc {
-                MOS6502Location::RegisterPool(i) => {
-                    let mask = ((1u64 << 1) - 1) << i;
-                    self.free_registers |= mask;
-                }
-                MOS6502Location::FrameSpill(i) => {
-                    self.free_spill.push((*i, 1))
-                }
-            }
-        }
-        // because this method of freeing results in a bunch of tiny free blocks, we have to
-        // coalesce free blocks afterwards
-        self.free_spill.sort_by_key(|block| block.0);
-        let mut merged: Vec<(u8, u8)> = Vec::new();
-        for block in &self.free_spill {
-            // look at the last block we merged. if it ends where we start, extend it by our length
-            if let Some(last) = merged.last_mut() && last.0 + last.1 == block.0 {
-                last.1 += block.1;
-                continue;
-            }
-            // otherwise add to the merged list
-            merged.push(*block);
-        }
-        self.free_spill = merged;
+        system_rom
     }
 }
 
