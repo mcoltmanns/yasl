@@ -43,6 +43,7 @@ Comments start with a // and run to the newline.
 ### Constants
 Constants can be used to define typed literal values.
 These are substituted at compile time.
+Constants cannot be defined in terms of expressions or other constants: something like `const twopi f16 3.14 * 2` is illegal.
 - const \<name> \<type> \<literal>
 
 ## Instructions
@@ -51,12 +52,16 @@ All instructions consume their operands (values on the stack on which they opera
 ### Stack control
 - push \<type> \<literal>
     - put a literal on top of the stack
+- push \<constant name>
+    - put a constant on top of the stack
 - pop
     - drop the top of the stack
 - dup
     - duplicate the top of the stack
 - swap
     - swap the top two values on the stack
+The only stack manipulation instruction that actually has a runtime cost is `push`.
+`pop`, `dup`, and `swap` are optimized away when the program is lowered to register form.
 
 ### Operations
 Operations consume values on the top of the stack. If they return a value, they leave it on the top.
