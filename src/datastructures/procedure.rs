@@ -354,7 +354,7 @@ logger.error("invalid jump destination", s.pos().clone());
 
             // get your entry stack
             let entry_stack = self.block_entry_stacks.get(&current_id).unwrap();
-            //println!("{}{} stack is {:?}", self.name, current_id, entry_stack);
+            // TODO is this correct? I don't think so. what
             // check for stack underflow
             if entry_stack.len() < current.pops() {
                 logger.error("stack underflow in block", current.pos().clone());
@@ -637,7 +637,9 @@ impl LiveRange {
 
 pub struct VRegProcedure {
     name: String,
+    /// these are the registers in which this procedure expects its arguments
     inputs: Vec<VReg>,
+    /// these are the registers in which this procedure will place its outputs
     outputs: Vec<VReg>,
     instructions: Vec<VirtualInstruction>,
     // map registers to their ranges
@@ -939,6 +941,7 @@ impl VRegProcedure {
                         }
                         input_regs.reverse();
                         // allocate output registers to the stack
+                        // these are the registers in this procedure that we are expecting our return values on
                         let mut output_regs: Vec<VReg> = vec![];
                         for output in outputs.iter() {
                             let or = allocator.fresh(*output);

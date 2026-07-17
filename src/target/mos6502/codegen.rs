@@ -438,3 +438,33 @@ pub fn pack_float(to: &[MOS6502Location], reg: usize) -> Vec<u8> {
     }
     out
 }
+
+/// given an array of moves which logically happen in parallel, generate an equivalent sequential ordering that's conflict-free
+///
+/// where a cycle exists, use one temp location
+///
+/// this is a standard algorithm (llvm/cranelift)
+pub fn sequentialize_moves<'a>(mut pending: Vec<(&'a MOS6502Location, &'a MOS6502Location)>, scratch: &'a MOS6502Location) -> Vec<(&'a MOS6502Location, &'a MOS6502Location)> {
+    let mut result = Vec::with_capacity(pending.len()); // we must have at least as many moves as the input
+    while !pending.is_empty() {
+        // a move is safe if its destination isn't read from by anything else
+        // find the index of the next safe move
+        let safe = pending.iter().position(|(_, dest)| !pending.iter().any(|(other_src, _)| other_src == dest));
+        // if we found a safe move, add it to the list of moves to make
+        if let Some(safe_idx) = safe {
+            result.push(pending.remove(safe_idx));
+        }
+        else {
+            // if there were no safe moves, break the next cycle
+            // add a move from the next destination into the scratch register (save whatever this move would've overwritten)
+            let (_, break_dest) = pending[0].clone();
+            result.push((break_dest, scratch)); // it doesn't actually matter where we add this 'save' move because the first part of the loop figures out the correct ordering
+            for (src, _) in pending.iter_mut() {
+                if *src == break_dest {
+                    *src = scratch;
+                }
+            }
+        }
+    }
+    result
+}

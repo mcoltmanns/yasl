@@ -87,7 +87,7 @@ fn main() {
         }
     }
     if let Ok(mut file) = File::create("./out.bin") {
-        file.write_all(&*bytes);
+        file.write_all(&*bytes).expect("unable to write output");
     }
     else {
         panic!("unable to create output file");

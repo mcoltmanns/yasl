@@ -1,12 +1,11 @@
 mod codegen;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use crate::datastructures::statement::InstructionPayload;
 use crate::logger::Logger;
 use crate::target::{AllocMap, DType, TrapSet};
-use crate::target::allocators::lin_alloc;
-use crate::target::mos6502::codegen::load_acc;
+use crate::target::mos6502::codegen::{load_acc, store_acc};
 use crate::target::Target;
 use crate::util::Positionable;
 
@@ -538,15 +537,17 @@ impl Target for MOS6502Target {
         // this can just be an array of bytes
         // it's wasteful to model the entire memory since only a part of it is rom
         let mut system_rom = vec![0; 0xffff + 1];
-        // initialize the data frame pointer
+        // initialize the data frame pointer (to its low value, since the stack must grow up because of how indexed addressing works)
         system_rom[Self::DFP_LO as usize] = 0x00;
         system_rom[Self::DFP_LO as usize + 1] = 0x02;
 
         // where we're emitting to right now
         let mut curr_emit_addr = MOS6502Target::PROG_START_DEFAULT;
 
-        // address table for program labels (procedures and labels in same table)
-        let mut addr_table = HashMap::new();
+        // address table for program labels
+        let mut label_addrs = HashMap::new();
+        // same for procedures
+        let mut proc_addrs = HashMap::new();
         // map addresses of jump instructions to the labels they need to be filled with
         let mut jumps_to_fill: HashMap<u16, &String> = HashMap::new();
         // same thing but for calls
@@ -556,8 +557,19 @@ impl Target for MOS6502Target {
         // we go procedure by procedure and write instructions
         for (proc_name, vreg_proc) in program.proc_table() {
             let allocation = &global_allocs[proc_name];
-
-            println!("{}", proc_name);
+            // from the allocation, we find out a few more things that we need for memory indexing
+            // the size of the spill section on the stack frame (in bytes)
+            let mut spill_size: usize = 0;
+            // which part of the register pool this procedure uses (needed for saving/restoring state during procedure calls)
+            let mut rpool_locs = HashSet::new();
+            for (_, locs) in allocation {
+                for loc in locs {
+                    match loc {
+                        MOS6502Location::RegisterPool(_) => { rpool_locs.insert(loc); }
+                        MOS6502Location::FrameSpill(_) => { spill_size += 1; }
+                    }
+                }
+            }
 
             // if the procedure is the entry point, write the reset vector
             if proc_name == "main" {
@@ -565,10 +577,14 @@ impl Target for MOS6502Target {
                 system_rom[0xfffd] = curr_emit_addr.to_le_bytes()[1];
             }
             // if the procedure is the interrupt handler, write the reset vector
+            // TODO the interrupt still needs save/restore state wrapper
             if proc_name == "trapper" {
                 system_rom[0xfffe] = curr_emit_addr.to_le_bytes()[0];
                 system_rom[0xffff] = curr_emit_addr.to_le_bytes()[1];
             }
+            // remember where this procedure is located in the source
+            proc_addrs.insert(proc_name, curr_emit_addr);
+            println!("{} @ {:02X}", proc_name, proc_addrs[&proc_name]);
 
             let mut write_bytes = | bytes: &[u8], addr: &mut u16 | {
                 system_rom[*addr as usize..*addr as usize + bytes.len()].copy_from_slice(bytes);
@@ -670,7 +686,7 @@ impl Target for MOS6502Target {
                     // LABELS AND JUMPS
                     InstructionPayload::Label { name } => {
                         // labels don't generate any code, instead we add an entry to the jump table
-                        addr_table.insert(name, curr_emit_addr);
+                        label_addrs.insert(name, curr_emit_addr);
                     }
                     InstructionPayload::Jump { dest } => {
                         // indiscriminate jump, can be forward or backward
@@ -714,6 +730,176 @@ impl Target for MOS6502Target {
                     }
 
                     // CALL AND RETURN
+                    InstructionPayload::Call { dest, inputs, outputs } => {
+                        // inputs are the registers being passed into the callee
+                        // outputs are the registers the callee will leave its values on
+                        // first save our sensitive state to the stack
+                        // these are all of the registerpool locations
+                        // we found these out at the start of procedure emission
+                        let mut frame_size = spill_size; // where in the dataframe can we start saving stuff? after the spill region
+                        // generate a move from each registerpool location to a corresponding offset past the DFP
+                        // order really doesn't matter
+                        let mut save_moves = Vec::with_capacity(rpool_locs.len());
+                        for rploc in rpool_locs.iter() {
+                            save_moves.push((*rploc, MOS6502Location::FrameSpill(frame_size as u8))); // move from the register into a framespill
+                            frame_size += 1;
+                        }
+                        // these moves are guaranteed to be conflict-free because the hashset's values are unique, so no register will be double-saved
+                        // emit the moves: load the register into a, write it y-indexed thru dfp
+                        for (src, dest) in save_moves.iter() {
+                            // and all of these have to be emitted, they will never be the same move
+                            write_bytes(&load_acc(src), &mut curr_emit_addr);
+                            write_bytes(&store_acc(&dest), &mut curr_emit_addr);
+                        }
+                        // we don't care about processor flags, so don't save those
+                        // increment the DFP by enough to cover the framespill plus save region of this procedure (save_offset will be this value)
+                        let so_bytes = frame_size.to_le_bytes();
+                        if so_bytes[2..].iter().any(|b| *b != 0) {
+                            logger.error("stack overflow (procedure save data too large)", instruction.pos().clone());
+                        }
+                        // before we increment the DFP, save it (because we'll need it later if any of the moves between procedure contexts are framespills)
+                        // save low byte to 0th sign scratch, high byte to low 0th sign scratch + 1 (should be 0th exp scratch but i think this is a little safer to read)
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::SIG0).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::SIG0 + 1).to_bytes(), &mut curr_emit_addr);
+                        // then increment
+                        write_bytes(&mut MOS6502Instruction::CLC.to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::LDA(so_bytes[0]).to_bytes(), &mut curr_emit_addr); // add low byte
+                        write_bytes(&mut MOS6502Instruction::ADCZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
+                        write_bytes(&mut MOS6502Instruction::LDA(so_bytes[1]).to_bytes(), &mut curr_emit_addr); // add high byte
+                        write_bytes(&mut MOS6502Instruction::ADCZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // also don't forget to save
+                        // now state is saved, data stack pointer is advanced, old data stack pointer is remembered
+                        // we can set things up for the callee
+                        // first we have to find out what we're calling
+                        let callee = program.proc_table().get(dest).unwrap();
+                        // and its memory layout
+                        let callee_allocs = global_allocs.get(dest).unwrap();
+                        // then we can move the inputs bound to this call instruction into the locations that the callee expects for its inputs
+                        // first construct a vector of all the moves we have to make
+                        let mut all_moves = vec![];
+                        for (src, dest) in inputs.iter().zip(callee.inputs()) {
+                            let src_locs = allocation.get(src).unwrap();
+                            let dest_locs = callee_allocs.get(dest).unwrap();
+                            for (sloc, dloc) in src_locs.iter().zip(dest_locs.iter()) {
+                                all_moves.push((sloc, dloc));
+                            }
+                        }
+                        // these moves may be in conflict with each other. reorder them to be safe:
+                        all_moves = codegen::sequentialize_moves(all_moves, &MOS6502Location::RegisterPool(Self::MAN0_LO)); // can use any scratch register (except the one where the DFP is)
+                        for (sloc, dloc) in all_moves {
+                            // now it's as easy as moving between the two locations
+                            // first load the source
+                            // we can skip moves between identical registers
+                            if let MOS6502Location::RegisterPool(si) = sloc && let MOS6502Location::RegisterPool(di) = dloc && si == di {
+                                continue;
+                            }
+                            match sloc {
+                                MOS6502Location::RegisterPool(i) => {
+                                    // if the source location is the register pool, the index is independent of the dfp, so load a from zero page
+                                    write_bytes(&mut MOS6502Instruction::LDAZ(*i).to_bytes(), &mut curr_emit_addr);
+                                }
+                                MOS6502Location::FrameSpill(i) => {
+                                    // if the source location is in the framespill, we need to load it relative to the old DFP, which we saved at SIG0
+                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
+                                    write_bytes(&mut MOS6502Instruction::LDAY(Self::SIG0).to_bytes(), &mut curr_emit_addr);
+                                }
+                            }
+                            // then save to dest
+                            match dloc {
+                                // same idea: register pool indexes are always absolute, framespills are relative to the NEW dfp (which is where we expect it to be)
+                                MOS6502Location::RegisterPool(i) => {
+                                    write_bytes(&mut MOS6502Instruction::STAZ(*i).to_bytes(), &mut curr_emit_addr);
+                                }
+                                MOS6502Location::FrameSpill(i) => {
+                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
+                                    write_bytes(&mut MOS6502Instruction::STAY(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                                }
+                            }
+                        }
+                        // now procedure state is saved, dfp is set up, arguments are copied in - we're ready to jump
+                        // issue the jump, remember that we need to complete its address
+                        calls_to_fill.insert(curr_emit_addr, dest);
+                        write_bytes(&mut MOS6502Instruction::JSR(0).to_bytes(), &mut curr_emit_addr); // jsr handles program counter for us
+                        // the jsr totally invalidates anything we had on registers (think old dfp)
+                        // once we return from the jump, we need to copy callee's outputs into the places we expect them
+                        // this is like the prelude to the call, only in reverse
+                        // outputs are the places in our context that we would like the callee's outputs to end up in
+                        // the locations of the callee's outputs in the callee's context are at callee.outputs()
+                        // the dfp points to the base of the callee's data frame, which is one past the end of yours
+                        // so if you decrement the DFP by frame_size (the size of your data frame including saved values for this procedure call), that points it back at the base of your frame again
+                        // before we restore the DFP, save the base pointer into SIG0 (we'll need it later if any of the callee's outputs are in framespills
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::SIG0).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::SIG0 + 1).to_bytes(), &mut curr_emit_addr);
+                        // then decrement
+                        write_bytes(&mut MOS6502Instruction::SEC.to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // subtract low byte
+                        write_bytes(&mut MOS6502Instruction::SBC(so_bytes[0]).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
+                        write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // subtract high byte
+                        write_bytes(&mut MOS6502Instruction::SBC(so_bytes[1]).to_bytes(), &mut curr_emit_addr);
+                        write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // also don't forget to save
+                        // now the DFP points to the base of the caller's frame again
+                        // same idea with moves, this time src is in callee, dest is in caller
+                        let mut all_moves = vec![];
+                        for (src, dest) in callee.outputs().iter().zip(outputs) {
+                            let src_locs = callee_allocs.get(src).unwrap();
+                            let dest_locs = allocation.get(dest).unwrap();
+                            for (sloc, dloc) in src_locs.iter().zip(dest_locs.iter()) {
+                                all_moves.push((sloc, dloc));
+                            }
+                        }
+                        // resolve move conflicts
+                        all_moves = codegen::sequentialize_moves(all_moves, &MOS6502Location::RegisterPool(Self::MAN0_LO));
+                        for (sloc, dloc) in all_moves {
+                            if let MOS6502Location::RegisterPool(si) = sloc && let MOS6502Location::RegisterPool(di) = dloc && si == di {
+                                continue;
+                            }
+                            match sloc {
+                                MOS6502Location::RegisterPool(i) => {
+                                    // if the source location is the register pool, the index is independent of the dfp, so load a from zero page
+                                    write_bytes(&mut MOS6502Instruction::LDAZ(*i).to_bytes(), &mut curr_emit_addr);
+                                }
+                                MOS6502Location::FrameSpill(i) => {
+                                    // if the source location is in the framespill, we need to load it relative to the old DFP, which we saved at SIG0
+                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
+                                    write_bytes(&mut MOS6502Instruction::LDAY(Self::SIG0).to_bytes(), &mut curr_emit_addr);
+                                }
+                            }
+                            // then save to dest
+                            match dloc {
+                                // same idea: register pool indexes are always absolute, framespills are relative to the NEW dfp (which is where we expect it to be)
+                                MOS6502Location::RegisterPool(i) => {
+                                    write_bytes(&mut MOS6502Instruction::STAZ(*i).to_bytes(), &mut curr_emit_addr);
+                                }
+                                MOS6502Location::FrameSpill(i) => {
+                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
+                                    write_bytes(&mut MOS6502Instruction::STAY(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
+                                }
+                            }
+                        }
+                        // restore your state (do save_moves, but backwards)
+                        for (dest, src) in save_moves {
+                            // avoid clobbering callee outputs
+                            // don't emit move if the place we're moving to is an output of this call
+                            if outputs.iter().any(|vr| { allocation[vr].contains(dest) }) {
+                                continue
+                            }
+                            write_bytes(&load_acc(&src), &mut curr_emit_addr);
+                            write_bytes(&store_acc(dest), &mut curr_emit_addr);
+                        }
+                    }
+                    InstructionPayload::Ret { regs } => {
+                        // regs is a vector of virtual registers (that map to return locations) which are relevant to this return call
+                        // do we even need to do anything here? we already emit moves that reconcile things with ends of procedures when lowering to virtualinstruction
+                        // and the caller knows where these are
+                        // i'm pretty sure all we need here is an RTS
+                        write_bytes(&mut MOS6502Instruction::RTS.to_bytes(), &mut curr_emit_addr);
+                    }
 
                     // MATH
                     InstructionPayload::Add { dest, a, b } => {
@@ -768,7 +954,13 @@ impl Target for MOS6502Target {
             // inst_addr is always the address of the first byte of the complete jump instruction
             // so inst_addr + 1 is small byte of the destination
             // inst_addr + 2 is the large byte of the destination
-            let dest_addr_bytes = addr_table.get(&dest_name).unwrap().to_le_bytes();
+            let dest_addr_bytes = label_addrs.get(&dest_name).unwrap().to_le_bytes();
+            system_rom[inst_addr as usize + 1] = dest_addr_bytes[0];
+            system_rom[inst_addr as usize + 2] = dest_addr_bytes[1];
+        }
+        // do same for procedure calls
+        for (inst_addr, dest_name) in calls_to_fill {
+            let dest_addr_bytes = proc_addrs.get(&dest_name).unwrap().to_le_bytes();
             system_rom[inst_addr as usize + 1] = dest_addr_bytes[0];
             system_rom[inst_addr as usize + 2] = dest_addr_bytes[1];
         }
