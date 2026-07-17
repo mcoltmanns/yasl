@@ -5,7 +5,6 @@ use std::iter::zip;
 use crate::datastructures::statement::InstructionPayload;
 use crate::logger::Logger;
 use crate::target::{AllocMap, DType, TrapSet};
-use crate::target::mos6502::codegen::{load_acc, store_acc};
 use crate::target::Target;
 use crate::util::Positionable;
 
@@ -577,7 +576,7 @@ impl Target for MOS6502Target {
                 system_rom[0xfffd] = curr_emit_addr.to_le_bytes()[1];
             }
             // if the procedure is the interrupt handler, write the reset vector
-            // TODO the interrupt still needs save/restore state wrapper
+            // TODO the interrupt still needs save/restore state wrapper (this is where trap_set comes into play)
             if proc_name == "trapper" {
                 system_rom[0xfffe] = curr_emit_addr.to_le_bytes()[0];
                 system_rom[0xffff] = curr_emit_addr.to_le_bytes()[1];
@@ -646,6 +645,10 @@ impl Target for MOS6502Target {
                         let dlocs = allocation.get(dest).unwrap();
                         let slocs = allocation.get(src).unwrap();
                         for (dloc, sloc) in zip(dlocs, slocs) {
+                            // no point in emitting a move between the same place
+                            if sloc == dloc {
+                                continue;
+                            }
                             // load a with whatever was at the start register
                             write_bytes(&codegen::load_acc(sloc), &mut curr_emit_addr);
                             // write it to the destination
@@ -748,8 +751,8 @@ impl Target for MOS6502Target {
                         // emit the moves: load the register into a, write it y-indexed thru dfp
                         for (src, dest) in save_moves.iter() {
                             // and all of these have to be emitted, they will never be the same move
-                            write_bytes(&load_acc(src), &mut curr_emit_addr);
-                            write_bytes(&store_acc(&dest), &mut curr_emit_addr);
+                            write_bytes(&codegen::load_acc(src), &mut curr_emit_addr);
+                            write_bytes(&codegen::store_acc(&dest), &mut curr_emit_addr);
                         }
                         // we don't care about processor flags, so don't save those
                         // increment the DFP by enough to cover the framespill plus save region of this procedure (save_offset will be this value)
@@ -780,6 +783,7 @@ impl Target for MOS6502Target {
                         // then we can move the inputs bound to this call instruction into the locations that the callee expects for its inputs
                         // first construct a vector of all the moves we have to make
                         let mut all_moves = vec![];
+                        assert_eq!(inputs.len(), callee.inputs().len()); // sanity check
                         for (src, dest) in inputs.iter().zip(callee.inputs()) {
                             let src_locs = allocation.get(src).unwrap();
                             let dest_locs = callee_allocs.get(dest).unwrap();
@@ -846,6 +850,7 @@ impl Target for MOS6502Target {
                         // now the DFP points to the base of the caller's frame again
                         // same idea with moves, this time src is in callee, dest is in caller
                         let mut all_moves = vec![];
+                        assert_eq!(outputs.len(), callee.outputs().len()); // sanity check
                         for (src, dest) in callee.outputs().iter().zip(outputs) {
                             let src_locs = callee_allocs.get(src).unwrap();
                             let dest_locs = allocation.get(dest).unwrap();
@@ -889,11 +894,11 @@ impl Target for MOS6502Target {
                             if outputs.iter().any(|vr| { allocation[vr].contains(dest) }) {
                                 continue
                             }
-                            write_bytes(&load_acc(&src), &mut curr_emit_addr);
-                            write_bytes(&store_acc(dest), &mut curr_emit_addr);
+                            write_bytes(&codegen::load_acc(&src), &mut curr_emit_addr);
+                            write_bytes(&codegen::store_acc(dest), &mut curr_emit_addr);
                         }
                     }
-                    InstructionPayload::Ret { regs } => {
+                    InstructionPayload::Ret { regs: _ } => {
                         // regs is a vector of virtual registers (that map to return locations) which are relevant to this return call
                         // do we even need to do anything here? we already emit moves that reconcile things with ends of procedures when lowering to virtualinstruction
                         // and the caller knows where these are
