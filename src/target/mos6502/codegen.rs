@@ -468,3 +468,45 @@ pub fn sequentialize_moves<'a>(mut pending: Vec<(&'a MOS6502Location, &'a MOS650
     }
     result
 }
+
+/// move a value from some context to the current one
+///
+/// a context is a certain value of DFP (the base to which FrameSpill offsets are added)
+///
+/// from_ctx_lo is a zero-page pointer to the external context (an address which holds a value)
+pub fn move_from_ctx(from: &MOS6502Location, to: &MOS6502Location, from_ctx_lo: u8) -> Vec<u8> {
+    let mut out = vec![];
+    // because from is in a foreign context, we have to be careful
+    match from {
+        // registerpool indices are context free
+        MOS6502Location::RegisterPool(_) => out.append(&mut load_acc(from)),
+        MOS6502Location::FrameSpill(i) => {
+            out.append(&mut MOS6502Instruction::LDY(*i).to_bytes());
+            out.append(&mut MOS6502Instruction::LDAY(from_ctx_lo).to_bytes());
+        }
+    };
+    // because to is in the current context, we can use the macro
+    out.append(&mut store_acc(to));
+    out
+}
+
+/// move a value from the current context to some external one
+///
+/// a context is a certain value of DFP (the base to which FrameSpill offsets are added)
+///
+/// to_ctx_lo is a zero-page pointer to the external context (an address which holds a value)
+pub fn move_to_ctx(from: &MOS6502Location, to: &MOS6502Location, to_ctx_lo: u8) -> Vec<u8> {
+    let mut out = vec![];
+    // because from is in the current context, we can use the macro
+    out.append(&mut load_acc(from));
+    // because to is in a foreign context, we have to be careful
+    match to {
+        // registerpool indices are context free
+        MOS6502Location::RegisterPool(_) => out.append(&mut store_acc(to)),
+        MOS6502Location::FrameSpill(i) => {
+            out.append(&mut MOS6502Instruction::LDY(*i).to_bytes());
+            out.append(&mut MOS6502Instruction::LDAY(to_ctx_lo).to_bytes());
+        }
+    };
+    out
+}
