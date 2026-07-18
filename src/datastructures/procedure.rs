@@ -354,7 +354,6 @@ logger.error("invalid jump destination", s.pos().clone());
 
             // get your entry stack
             let entry_stack = self.block_entry_stacks.get(&current_id).unwrap();
-            // TODO is this correct? I don't think so. what
             // check for stack underflow
             if entry_stack.len() < current.pops() {
                 logger.error("stack underflow in block", current.pos().clone());
@@ -962,6 +961,8 @@ impl VRegProcedure {
                         instructions.push(VirtualInstruction::new(InstructionPayload::Label { name: name.clone() }, s.pos().clone()));
                     }
                     StatementPayload::Ret => {
+                        // we already check this invariant during type resolution, but enforce it again here to be safe
+                        assert_eq!(proc_outputs.len(), reg_stack.len());
                         // move things into the return registers
                         for (slot, from) in proc_outputs.iter().rev().zip(reg_stack.iter().rev()) {
                             instructions.push(VirtualInstruction::new(InstructionPayload::Move { dest: *slot, src: *from }, s.pos().clone()));
