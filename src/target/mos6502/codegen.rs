@@ -510,3 +510,48 @@ pub fn move_to_ctx(from: &MOS6502Location, to: &MOS6502Location, to_ctx_lo: u8) 
     };
     out
 }
+
+/// add a compile-time known byte to *ptr, considering carry
+///
+/// ptr must be in zero-page
+///
+/// this is ever so slightly faster than normal two-byte addition
+pub fn add_byte_literal_zp(byte: u8, zp_ptr: u8) -> Vec<u8> {
+    let mut out = vec![];
+    out.append(&mut MOS6502Instruction::CLC.to_bytes());
+    // load pointer low byte
+    out.append(&mut MOS6502Instruction::LDAZ(zp_ptr).to_bytes());
+    // add the byte
+    out.append(&mut MOS6502Instruction::ADC(byte).to_bytes());
+    // save pointer
+    out.append(&mut MOS6502Instruction::STAZ(zp_ptr).to_bytes());
+    // if the addition set carry, we have to increment the high byte
+    // BCC is convenient here
+    // construct the incrementation instruction first so we know how many bytes to skip for the branch
+    let inc_inst = &mut MOS6502Instruction::INCZ(zp_ptr + 1).to_bytes();
+    out.append(&mut MOS6502Instruction::BCC(inc_inst.len() as u8).to_bytes());
+    out.append(inc_inst);
+    out
+}
+
+/// subtract a compile-time known byte from *ptr, considering carry
+///
+/// ptr must be in zero-page
+///
+/// this is ever so slightly faster than normal two-byte subtraction
+pub fn sub_byte_literal_zp(byte: u8, zp_ptr: u8) -> Vec<u8> {
+    let mut out = vec![];
+    out.append(&mut MOS6502Instruction::SEC.to_bytes());
+    // load pointer low byte
+    out.append(&mut MOS6502Instruction::LDAZ(zp_ptr).to_bytes());
+    // subtract the byte
+    out.append(&mut MOS6502Instruction::SBC(byte).to_bytes());
+    // save pointer
+    out.append(&mut MOS6502Instruction::STAZ(zp_ptr).to_bytes());
+    // if the subtraction cleared carry, we have to decrement the high byte
+    // BCS is convenient here
+    // construct the incrementation instruction first so we know how many bytes to skip for the branch
+    let inc_inst = &mut MOS6502Instruction::DECZ(zp_ptr + 1).to_bytes();
+    out.append(&mut MOS6502Instruction::BCS(inc_inst.len() as u8).to_bytes());
+    out
+}

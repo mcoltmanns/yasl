@@ -769,13 +769,7 @@ impl Target for MOS6502Target {
                         // first increment the DFP to one past the end of our spill locations to set us up for saving our register state
                         // don't need to emit this if the spill size is 0
                         if spill_size != 0 {
-                            write_bytes(&mut MOS6502Instruction::CLC.to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::LDA(spill_size.to_le_bytes()[0]).to_bytes(), &mut curr_emit_addr); // add low byte
-                            write_bytes(&mut MOS6502Instruction::ADCZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
-                            // if adding the low byte set the carry flag, we need to increment the high byte
-                            write_bytes(&mut MOS6502Instruction::BCC(2).to_bytes(), &mut curr_emit_addr); // skip the incrementation if no carry (incrementation of zero page address is always a 2 byte instruction
-                            write_bytes(&mut MOS6502Instruction::INCZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // increment the high byte of the dfp
+                            write_bytes(&mut codegen::add_byte_literal_zp(spill_size, Self::DFP_LO), &mut curr_emit_addr);
                         }
                         // now the DFP points to the location immediately after where we saved our spills in this call frame
                         // now we can save the registerpool locations that we use, order doesn't matter here
@@ -788,7 +782,7 @@ impl Target for MOS6502Target {
                         // these moves are guaranteed to be conflict-free because the hashset's values are unique, so no register will be double-saved
                         // because we already incremented the DFP to the end of our spill we don't need to do any extra math for the indexing to be right
                         for (src, dest) in save_moves.iter() {
-                            // and all of these have to be emitted, they will never be the same move
+                            // and all of these have to be emitted, they will never be the same move (because by definition you're going register-spill space)
                             write_bytes(&codegen::load_acc(src), &mut curr_emit_addr);
                             write_bytes(&codegen::store_acc(dest), &mut curr_emit_addr);
                         }
@@ -796,13 +790,7 @@ impl Target for MOS6502Target {
                         // then increment the dfp again, but this time by the number of locations we saved
                         // again don't need to do this if we didn't save any locations
                         if save_index != 0 {
-                            write_bytes(&mut MOS6502Instruction::CLC.to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::LDA(save_index.to_le_bytes()[0]).to_bytes(), &mut curr_emit_addr); // add low byte
-                            write_bytes(&mut MOS6502Instruction::ADCZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
-                            // if adding the low byte set the carry flag, we need to increment the high byte
-                            write_bytes(&mut MOS6502Instruction::BCC(2).to_bytes(), &mut curr_emit_addr); // skip the incrementation if no carry (incrementation of zero page address is always a 2 byte instruction
-                            write_bytes(&mut MOS6502Instruction::INCZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // increment the high byte of the dfp
+                            write_bytes(&mut codegen::add_byte_literal_zp(save_index, Self::DFP_LO), &mut curr_emit_addr);
                         }
                         // now state is saved, data stack pointer is advanced
                         // we can set things up for the callee
@@ -810,26 +798,14 @@ impl Target for MOS6502Target {
                         moves_in = codegen::sequentialize_moves(moves_in, &MOS6502Location::RegisterPool(Self::SIG0 + 2)); // can use any scratch register except the one where the old DFP is copied
                         for (sloc, dloc) in moves_in {
                             // now it's as easy as moving between the two locations
-                            // first load the source
-                            // we can skip moves between identical registers
+                            // we can skip moves between identical registers (register indices are global)
                             if let MOS6502Location::RegisterPool(si) = sloc && let MOS6502Location::RegisterPool(di) = dloc && si == di {
                                 continue;
                             }
-                            // because the DFP is set up for the new stack frame, we need to take special care when moving from sloc (because it's a location in the context of the caller, so we need to use the old DFP)
-                            match sloc {
-                                MOS6502Location::RegisterPool(i) => {
-                                    // if the source location is the register pool, the index is independent of the dfp, so load a from zero page
-                                    write_bytes(&mut MOS6502Instruction::LDAZ(*i).to_bytes(), &mut curr_emit_addr);
-                                }
-                                MOS6502Location::FrameSpill(i) => {
-                                    // if the source location is in the framespill, we need to load it relative to the old DFP, which we saved at SIG0
-                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
-                                    write_bytes(&mut MOS6502Instruction::LDAY(Self::SIG0).to_bytes(), &mut curr_emit_addr);
-                                }
-                            }
-                            // then save to dest
-                            // because the dfp is set up for the new stack frame and dloc is a location in the context of the callee, we can use macros
-                            write_bytes(&mut codegen::store_acc(dloc), &mut curr_emit_addr);
+                            // the DFP is set up with the new stack frame (current context is the new stack frame)
+                            // old context (the caller's) is saved at SIG0
+                            // so we are moving sloc from some context to the current one
+                            write_bytes(&mut codegen::move_from_ctx(sloc, dloc, Self::SIG0), &mut curr_emit_addr);
                         }
                         // now procedure state is saved, dfp is set up, arguments are copied in - we're ready to jump
                         // issue the jump, remember that we need to complete its address
@@ -850,14 +826,7 @@ impl Target for MOS6502Target {
                         // first decrement it so it points to the start of our register saves
                         // can skip this if no registers were saved
                         if save_index != 0 {
-                            write_bytes(&mut MOS6502Instruction::SEC.to_bytes(), &mut curr_emit_addr);
-                            // watch operand order!! want dfp-index
-                            write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // sub low byte
-                            write_bytes(&mut MOS6502Instruction::SBC(save_index.to_le_bytes()[0]).to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
-                            // if subtracting the low byte cleared the carry flag, we need to decrement the high byte
-                            write_bytes(&mut MOS6502Instruction::BCS(2).to_bytes(), &mut curr_emit_addr); // skip the decrementation if carry
-                            write_bytes(&mut MOS6502Instruction::DECZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // decrement the low byte of the dfp
+                            write_bytes(&mut codegen::sub_byte_literal_zp(save_index, Self::DFP_LO), &mut curr_emit_addr);
                         }
                         // now the DFP points to the location immediately after where we saved our spills in the call frame/to the base of where we saved our registers
                         // we could restore state now, but that might corrupt zp registers which hold callee outputs
@@ -869,41 +838,24 @@ impl Target for MOS6502Target {
                         // then decrement it by the number of spills in the caller's context
                         // again can skip if nothing was saved
                         if spill_size != 0 {
-                            // for decrementation, you have to SEC
-                            write_bytes(&mut MOS6502Instruction::SEC.to_bytes(), &mut curr_emit_addr);
-                            // again watch your oop
-                            write_bytes(&mut MOS6502Instruction::LDAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // sub low byte
-                            write_bytes(&mut MOS6502Instruction::SBC(spill_size.to_le_bytes()[0]).to_bytes(), &mut curr_emit_addr);
-                            write_bytes(&mut MOS6502Instruction::STAZ(Self::DFP_LO).to_bytes(), &mut curr_emit_addr); // don't forget to save it!
-                            // if subtracting the low byte cleared the carry flag, we need to decrement the high byte
-                            write_bytes(&mut MOS6502Instruction::BCS(2).to_bytes(), &mut curr_emit_addr); // skip the decrementation if carry
-                            write_bytes(&mut MOS6502Instruction::DECZ(Self::DFP_LO + 1).to_bytes(), &mut curr_emit_addr); // decrement the high byte of the dfp
+                            write_bytes(&mut codegen::sub_byte_literal_zp(spill_size, Self::DFP_LO), &mut curr_emit_addr);
                         }
                         // now the DFP points to the base of the caller's frame again
                         // resolve move conflicts out of procedure
                         moves_out = codegen::sequentialize_moves(moves_out, &MOS6502Location::RegisterPool(Self::SIG0 + 4));
                         for (sloc, dloc) in moves_out {
+                            // again skip identical registers
                             if let MOS6502Location::RegisterPool(si) = sloc && let MOS6502Location::RegisterPool(di) = dloc && si == di {
                                 continue;
                             }
-                            // because the dfp is set up for the caller's stack frame, we need to take special care when moving from sloc (because it's a location in the context of the callee, so we need to use the old dfp)
-                            match sloc {
-                                MOS6502Location::RegisterPool(i) => {
-                                    // if the source location is the register pool, the index is independent of the dfp, so load a from zero page
-                                    write_bytes(&mut MOS6502Instruction::LDAZ(*i).to_bytes(), &mut curr_emit_addr);
-                                }
-                                MOS6502Location::FrameSpill(i) => {
-                                    // if the source location is in the framespill, we need to load it relative to the callee's DFP, which we saved at SIG0
-                                    write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
-                                    write_bytes(&mut MOS6502Instruction::LDAY(Self::SIG0).to_bytes(), &mut curr_emit_addr);
-                                }
-                            }
-                            // then save to dest
-                            // because the dfp is set up for the caller's stack frame and dloc is a location in the context of the caller, we can use macros
-                            write_bytes(&mut codegen::store_acc(dloc), &mut curr_emit_addr);
+                            // the DFP is set up for the caller's stack frame (the current context is the caller's)
+                            // the callee's context is saved at SIG0
+                            // so we are moving from the callee's context to the current one
+                            write_bytes(&mut codegen::move_from_ctx(sloc, dloc, Self::SIG0), &mut curr_emit_addr);
                         }
                         // finally restore state
                         // the base index for the caller's save region is in SIG0+2/SIG0+3, this is what the indices in src locations here are relative to
+                        // again, we are moving from a context in SIG0 + 2 to the current context
                         for (dest, src) in save_moves.iter() {
                             // avoid clobbering callee outputs
                             // skip moves that would write to somewhere we wrote a callee output to
@@ -911,13 +863,7 @@ impl Target for MOS6502Target {
                                 continue;
                             }
                             assert!(matches!(src, MOS6502Location::FrameSpill(_))); // sanity check - the only place we can restore from is the frame stack
-                            // have to index relative to sig0+2 here
-                            if let MOS6502Location::FrameSpill(i) = src { // this condition should always be true
-                                write_bytes(&mut MOS6502Instruction::LDY(*i).to_bytes(), &mut curr_emit_addr);
-                                write_bytes(&mut MOS6502Instruction::LDAY(Self::SIG0 + 2).to_bytes(), &mut curr_emit_addr);
-                            } else { panic!() } // if you end up here something is really wrong
-                            assert!(matches!(dest, MOS6502Location::RegisterPool(_))); // sanity check - the only place we can restore to is the register pool
-                            write_bytes(&codegen::store_acc(dest), &mut curr_emit_addr); // indexes into register pool are valid regardless of context, so we can use a macro
+                            write_bytes(&mut codegen::move_from_ctx(src, dest, Self::SIG0 + 2), &mut curr_emit_addr);
                         }
                     }
                     InstructionPayload::Ret { regs: _ } => {
