@@ -1,8 +1,9 @@
-use std::fmt::Display;
-use crate::util::{FilePos, Positionable};
+use std::cmp::PartialEq;
+use crate::util::{FilePos, Positioned};
 
+/// Data held by a token
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum TokenPayload {
+enum TokenData {
     Unknown(String),
     Eof,
 
@@ -45,21 +46,24 @@ pub enum TokenPayload {
     In,
     Out,
     Def,
-    Trap,
+    //Trap,
+    Nmi,
+    Swi,
+    Hwi,
 
-    // these are all literals
-    // tokenizer does not parse them, only extract
+    // names are function or constant identifiers
     Name(String),
+    // literals are numbers (unparsed)
     Literal(String),
 
     // these are types
-    // payload denotes width
+    // value denotes width of the type
     IType(u8),
     UType(u8),
     FType(u8),
     PtrType
 }
-impl From<&str> for TokenPayload {
+impl From<&str> for TokenData {
     fn from(value: &str) -> Self {
         match value {
             "" => Self::Eof,
@@ -114,62 +118,38 @@ impl From<&str> for TokenPayload {
             "in" => Self::In,
             "out" => Self::Out,
             "def" => Self::Def,
-            "trap" => Self::Trap,
+            "nmi" => Self::Nmi,
+            "swi" => Self::Swi,
+            "hwi" => Self::Hwi,
             word => {
                 // if we didn't match a keyword, this must be a literal or a name
                 // literals all start with - or any digit
                 // so if the first letter of the word is alphabetical, it is a name
                 let first = word.chars().next();
                 if first.is_some_and(|c| c.is_alphabetic() || c == '_') {
-                    return TokenPayload::Name(word.to_string());
+                    return TokenData::Name(word.to_string());
                 }
                 // if the first letter is not numeric, we don't know what this token is
                 else if first.is_some_and(|c| !c.is_numeric() && c != '-' ) {
-                    return TokenPayload::Unknown(word.to_string());
+                    return TokenData::Unknown(word.to_string());
                 }
                 // otherwise, it is a number
-                TokenPayload::Literal(word.to_string())
+                TokenData::Literal(word.to_string())
             }
         }
     }
 }
 
-pub struct Token {
-    payload: TokenPayload,
-    pos: FilePos,
-}
+/// A token is a positioned instance of TokenData
+pub type Token = Positioned<TokenData>;
+
 impl Token {
-    pub fn new(pos: FilePos, source: &str) -> Self {
-        Token { payload: source.into(), pos }
+    pub fn new(source: &str, pos: FilePos) -> Token {
+        Token::new(source, pos) // this is weird. why does this work?
     }
-
-    pub fn payload(&self) -> &TokenPayload {
-        &self.payload
-    }
-
+    // we don't need a payload method, since we can just dereference a token to get its data
     pub fn is_eof(&self) -> bool {
-        self.payload == TokenPayload::Eof
-    }
-}
-impl Positionable for Token {
-    fn pos(&self) -> &FilePos {
-        &self.pos    
-    }
-    fn line(&self) -> usize {
-        self.pos.line
-    }
-    fn col(&self) -> usize {
-        self.pos.col
-    }
-}
-impl Display for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match &self.payload {
-            TokenPayload::Name(s) => format!("\"{}\"", s),
-            TokenPayload::Literal(s) => format!("literal \"{}\"", s),
-            TokenPayload::Unknown(s) => format!("\"{}\"", s),
-            _ => format!("{:?}", self.payload)
-        };
-        write!(f, "{}", str)
+        // double deref gets the data stored in this token
+        **self == TokenData::Eof
     }
 }
