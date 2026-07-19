@@ -4,6 +4,8 @@ pub mod datastructures;
 pub mod regmachine;
 pub mod target;
 
+// TODO at this point maybe move the logger to its own file, it's looking a little overgrown
+
 pub mod logger {
     use crate::util::FilePos;
 
@@ -102,6 +104,7 @@ pub mod logger {
     }
 }
 
+// TODO this probably doesn't need to be its own module
 pub mod util {
     use std::fmt::Display;
 
@@ -122,9 +125,35 @@ pub mod util {
         }
     }
 
-    pub trait Positionable {
+    // this trait is only useful for polymorphism over all positioned things
+    // probably only good for error reporting? keep it in anyway, it's not much extra work
+    trait Positionable {
         fn pos(&self) -> &FilePos;
         fn line(&self) -> usize;
         fn col(&self) -> usize;
+        fn name(&self) -> &String;
+    }
+    /// Wrapper type for things that have a position in source
+    pub struct Positioned<T> {
+        value: T,
+        pos: FilePos,
+    }
+    impl<T> Positioned<T> {
+        fn new(value: T, pos: FilePos) -> Positioned<T> {
+            Positioned { value, pos }
+        }
+    }
+    // implementing deref allows the user to do *Positioned<T> to access T
+    impl<T> std::ops::Deref for Positioned<T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.value
+        }
+    }
+    impl<T> Positionable for Positioned<T> {
+        fn pos(&self) -> &FilePos { &self.pos }
+        fn line(&self) -> usize { self.pos.line }
+        fn col(&self) -> usize { self.pos.col }
+        fn name(&self) -> &String { &self.pos.name }
     }
 }
