@@ -1,9 +1,8 @@
 use std::cmp::PartialEq;
-use crate::util::{FilePos, Positioned};
 
 /// Data held by a token
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum TokenData {
+pub enum Token {
     Unknown(String),
     Eof,
 
@@ -63,7 +62,7 @@ enum TokenData {
     FType(u8),
     PtrType
 }
-impl From<&str> for TokenData {
+impl From<&str> for Token {
     fn from(value: &str) -> Self {
         match value {
             "" => Self::Eof,
@@ -76,7 +75,7 @@ impl From<&str> for TokenData {
             "sub" => Self::Sub,
             "mult" => Self::Mult,
             "div" => Self::Div,
-            "mod" => Self::Mod,
+            "tokenizer" => Self::Mod,
             "inc" => Self::Inc,
             "dec" => Self::Dec,
             "and" => Self::And,
@@ -127,29 +126,21 @@ impl From<&str> for TokenData {
                 // so if the first letter of the word is alphabetical, it is a name
                 let first = word.chars().next();
                 if first.is_some_and(|c| c.is_alphabetic() || c == '_') {
-                    return TokenData::Name(word.to_string());
+                    return Token::Name(word.to_string());
                 }
                 // if the first letter is not numeric, we don't know what this token is
                 else if first.is_some_and(|c| !c.is_numeric() && c != '-' ) {
-                    return TokenData::Unknown(word.to_string());
+                    return Token::Unknown(word.to_string());
                 }
                 // otherwise, it is a number
-                TokenData::Literal(word.to_string())
+                Token::Literal(word.to_string())
             }
         }
     }
 }
-
-/// A token is a positioned instance of TokenData
-pub type Token = Positioned<TokenData>;
-
 impl Token {
-    pub fn new(source: &str, pos: FilePos) -> Token {
-        Token::new(source, pos) // this is weird. why does this work?
-    }
-    // we don't need a payload method, since we can just dereference a token to get its data
     pub fn is_eof(&self) -> bool {
         // double deref gets the data stored in this token
-        **self == TokenData::Eof
+        *self == Token::Eof
     }
 }

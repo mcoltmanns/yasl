@@ -1,12 +1,14 @@
-mod token;
+pub mod datastructures;
 
-use token::Token;
-use crate::util::FilePos;
+use datastructures::*;
+use crate::util::{FilePos, Positioned};
+use crate::util::source::FileId;
 
+/// Implementation of the tokenizer
 #[derive(Debug)]
-pub struct Tokenizer {
-    /// File name of the source string
-    source_name: String,
+struct Tokenizer {
+    /// File id of the source string
+    source_id: FileId,
     /// Source string
     source: String,
     /// Current index into the source string
@@ -16,15 +18,14 @@ pub struct Tokenizer {
     /// Current character in the current line in the source string
     col: usize
 }
-
 impl Tokenizer {
     /// Initialize a Tokenizer over a given source string
-    pub fn new(source_name: String, source: String) -> Self {
-        Tokenizer { source_name, source, pos: 0, line: 1, col: 1 }
+    fn new(source_id: FileId, source: String) -> Self {
+        Tokenizer { source_id, source, pos: 0, line: 1, col: 1 }
     }
 
     /// Tokenize this Tokenizer's string
-    pub fn run(&mut self) -> Vec<Token> {
+    fn run(&mut self) -> Vec<Positioned<Token>> {
         let mut tokens = Vec::new();
         loop {
             self.consume_whitespace();
@@ -38,7 +39,7 @@ impl Tokenizer {
     }
 
     /// Construct and consume the next token in the source string
-    fn consume_token(&mut self) -> Token {
+    fn consume_token(&mut self) -> Positioned<Token> {
         // find out how long the next word is
         let mut tok_len: usize = 0;
         loop {
@@ -49,7 +50,7 @@ impl Tokenizer {
         }
         let tok_src = if tok_len == 0 { "" } else { self.peek_word(tok_len) };
         // grab the slice which contains that word and turn it into a token
-        let tok = Token::new(tok_src, FilePos::new(&self.source_name, self.line, self.col));
+        let tok = Positioned::new(Token::from(tok_src), FilePos::new(self.source_id, self.line, self.col));
         self.advance_times(tok_len);
         tok
     }
@@ -121,3 +122,9 @@ impl Tokenizer {
     }
 }
 
+/// Generate a token array from a source string.
+/// Tokens are positioned.
+pub fn tokenize(source: String, source_id: FileId) -> Vec<Positioned<Token>> {
+    let mut tokenizer = Tokenizer::new(source_id, source);
+    tokenizer.run()
+}
