@@ -1,31 +1,19 @@
 use crate::datastructures::TypeStack;
 use crate::datastructures::TypeStackEntry;
-use crate::util::Positionable;
-use crate::util::FilePos;
 
 #[derive(Debug)]
 pub struct BasicBlock {
     start: usize,
     length: usize,
-    pos: FilePos,
 
     pops: usize,
     pushes: TypeStack,
 }
-impl Positionable for BasicBlock {
-    fn pos(&self) -> &FilePos {
-        &self.pos
-    }
-    fn line(&self) -> usize {
-        self.pos.line
-    }
-    fn col(&self) -> usize {
-        self.pos.col
-    }
-}
+
+// Basic blocks don't need a position field, because their position depends on the position of their first statement
 impl BasicBlock {
-    pub fn new(start: usize, length: usize, pos: FilePos) -> Self {
-        BasicBlock { start, length, pos, pops: 0, pushes: vec![] }
+    pub fn new(start: usize, length: usize) -> Self {
+        BasicBlock { start, length, pops: 0, pushes: TypeStack::new() }
     }
 
     pub fn start(&self) -> usize {

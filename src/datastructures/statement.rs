@@ -1,8 +1,9 @@
 use half::f16;
-use std::{fmt::Display};
+use crate::tokenizer::datastructures::Token;
 
-use crate::{datastructures::token::{Token, TokenPayload}, regmachine::VReg, util::{FilePos, Positionable}};
-
+// TODO where do dtype and literal belong? they're both compile-time primitives which are lost when translating to ASM
+// maybe in a primitives.rs?
+// they remain relevant in both the stack and register machine translations of the program
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     Pointer,
@@ -24,8 +25,8 @@ impl DType {
     }
 
     pub fn from_token(t: &Token) -> Result<Self, String> {
-        match t.payload() {
-            TokenPayload::IType(w) => {
+        match t {
+            Token::IType(w) => {
                 match w {
                     8 => Ok(Self::I8),
                     16 => Ok(Self::I16),
@@ -36,7 +37,7 @@ impl DType {
                     }
                 }
             }
-            TokenPayload::UType(w) => {
+            Token::UType(w) => {
                 match w {
                     8 => Ok(Self::U8),
                     16 => Ok(Self::U16),
@@ -47,7 +48,7 @@ impl DType {
                     }
                 }
             }
-            TokenPayload::FType(w) => {
+            Token::FType(w) => {
                 match w {
                     16 => Ok(Self::F16),
                     32 => Ok(Self::F32),
@@ -57,9 +58,9 @@ impl DType {
                     }
                 }
             }
-            TokenPayload::PtrType => Ok(Self::Pointer),
+            Token::PtrType => Ok(Self::Pointer),
             _ => {
-                Err(format!("unknown type {}", t))
+                Err(format!("unknown type {:?}", t))
             }
         }
     }
@@ -100,8 +101,8 @@ pub enum Literal {
 }
 impl Literal {
     pub fn from_token(t: &Token, dtype: &DType) -> Result<Self, String> {
-        match t.payload() {
-            TokenPayload::Literal(st) => {
+        match t {
+            Token::Literal(st) => {
                 let (repr, radix) =
                 if let Some(s) = st.strip_prefix("0x") {
                     (s, 16)
@@ -190,163 +191,4 @@ pub enum StatementPayload {
     Leq,
     Gt,
     Geq,
-}
-
-#[derive(Debug, Clone)]
-pub struct VirtualStatement {
-    payload: StatementPayload,
-    pos: FilePos,
-    math_type: Option<DType>,
-}
-impl VirtualStatement {
-    pub fn new(payload: StatementPayload, pos: FilePos) -> Self {
-        Self { payload, pos, math_type: None }
-    }
-
-    pub fn payload(&self) -> &StatementPayload {
-        &self.payload
-    }
-
-    pub fn set_type(&mut self, t: DType) {
-        self.math_type = Some(t);
-    }
-
-    pub fn math_type(&self) -> &Option<DType> {
-        &self.math_type
-    }
-}
-impl Display for VirtualStatement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let opt = match &self.payload {
-            StatementPayload::Push { value } => format!("Push {:?}", value),
-            StatementPayload::Load { kind } => format!("Load {:?}", kind),
-            StatementPayload::Store { kind } => format!("Store {:?}", kind),
-            StatementPayload::Label { name } => format!("Label {:?}", name),
-            StatementPayload::Jump { dest } => format!("Jump {:?}", dest),
-            StatementPayload::Jumpif { dest } => format!("Jumpif {:?}", dest),
-            StatementPayload::Call { dest } => format!("Call {:?}", dest),
-            StatementPayload::Cast { to } => format!("Cast {:?}", to),
-            StatementPayload::Conv { to } => format!("Conv {:?}", to),
-            _ => format!("{:?}", self.payload)
-        };
-        write!(f, "{}", opt)
-    }
-}
-impl Positionable for VirtualStatement {
-    fn pos(&self) -> &FilePos {
-        &self.pos
-    }
-    fn line(&self) -> usize {
-        self.pos.line
-    }
-    fn col(&self) -> usize {
-        self.pos.col
-    }
-}
-
-pub struct VirtualInstruction {
-    payload: InstructionPayload,
-    pos: FilePos,
-}
-impl VirtualInstruction {
-    pub fn new(payload: InstructionPayload, pos: FilePos) -> Self {
-        Self { payload, pos }
-    }
-    pub fn payload(&self) -> &InstructionPayload { &self.payload }
-}
-impl Positionable for VirtualInstruction {
-    fn pos(&self) -> &FilePos { &self.pos }
-    fn line(&self) -> usize { self.pos.line }
-    fn col(&self) -> usize { self.pos.col }
-}
-
-// args are always dest arg1 arg2
-#[derive(Debug)]
-pub enum InstructionPayload {
-    // load a literal to a register
-    LoadImm { dest: VReg, val: Literal },
-    // load a register from memory
-    LoadMem { dest: VReg, addr: VReg },
-    // store a register to memory
-    Store { addr: VReg, src: VReg },
-
-    // copy a value from one register to another
-    Move { dest: VReg, src: VReg },
-
-    // cast a value in a register
-    // this might change the bits stored
-    Cast { dest: VReg, src: VReg, to: DType },
-    // conv does not need an instruction, we just move the value into a new register of the
-    // destination type
-    
-    Label { name: String },
-    // jump to a label
-    Jump { dest: String },
-    // jump to a label if the value in cmp is not 0
-    Jumpif { dest: String, cmp: VReg },
-    // jump to a label and push a return address to the stack
-    Call { dest: String, inputs: Vec<VReg>, outputs: Vec<VReg> },
-    // pop the stack and jump to that address to continue execution
-    Ret { regs: Vec<VReg> },
-
-    // we don't need to type operations, because their type can be determined from the registers
-    // they operate on
-    Add { dest: VReg, a: VReg, b: VReg },
-    Sub { dest: VReg, a: VReg, b: VReg },
-    Div { dest: VReg, a: VReg, b: VReg },
-    Mul { dest: VReg, a: VReg, b: VReg }, 
-    Mod { dest: VReg, a: VReg, b: VReg },
-    Inc { dest: VReg, a: VReg },
-    Dec { dest: VReg, a: VReg },
-    And { dest: VReg, a: VReg, b: VReg },
-    Or  { dest: VReg, a: VReg, b: VReg },
-    Not { dest: VReg, a: VReg },
-    Xor { dest: VReg, a: VReg, b: VReg },
-    Bsl { dest: VReg, a: VReg },
-    Bsr { dest: VReg, a: VReg },
-    Rol { dest: VReg, a: VReg },
-    Ror { dest: VReg, a: VReg },
-    Eq  { dest: VReg, a: VReg, b: VReg },
-    Neq { dest: VReg, a: VReg, b: VReg },
-    Lt  { dest: VReg, a: VReg, b: VReg },
-    Leq { dest: VReg, a: VReg, b: VReg },
-    Gt  { dest: VReg, a: VReg, b: VReg },
-    Geq { dest: VReg, a: VReg, b: VReg },
-}
-impl InstructionPayload {
-    pub fn registers(&self) -> Vec<VReg> {
-        match self {
-            Self::Add { dest, a, b }
-            | Self::Sub { dest, a, b }
-            | Self::Mul { dest, a, b }
-            | Self::Div { dest, a, b }
-            | Self::Mod { dest, a, b }
-            | Self::And { dest, a, b }
-            | Self::Or { dest, a, b }
-            | Self::Xor { dest, a, b }
-            | Self::Eq { dest, a, b }
-            | Self::Neq { dest, a, b }
-            | Self::Lt { dest, a, b }
-            | Self::Leq { dest, a, b }
-            | Self::Gt { dest, a, b }
-            | Self::Geq { dest, a, b } => vec![*dest, *a, *b],
-            Self::Inc { dest, a }
-            | Self::Dec { dest, a }
-            | Self::Not { dest, a }
-            | Self::Bsl { dest, a }
-            | Self::Bsr { dest, a }
-            | Self::Rol { dest, a }
-            | Self::Ror { dest, a } => vec![*dest, *a],
-            Self::Cast { dest, src, .. }
-            | Self::Move { src, dest } => vec![*src, *dest],
-            Self::LoadMem { addr, dest } => vec![*addr, *dest],
-            Self::Store { addr, src, .. } => vec![*addr, *src],
-            Self::Jumpif { dest: _, cmp } => vec![*cmp],
-            Self::Ret { regs } => regs.clone(),
-            Self::Call { inputs, .. } => inputs.clone(),
-            Self::LoadImm { dest, .. } => vec![*dest],
-            | Self::Jump { .. }
-            | Self::Label { .. } => vec![],
-        }
-    }
 }

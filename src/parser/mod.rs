@@ -8,7 +8,7 @@ use crate::parser::datastructures::StackStatement;
 use crate::util::{FilePos, Positioned};
 use crate::tokenizer::datastructures::Token;
 
-pub fn run(tokens: Vec<Positioned<Token>>, logger: &mut dyn Logger) -> Result<StackProgram, ()> {
+pub fn parse(tokens: Vec<Positioned<Token>>, logger: &mut dyn Logger) -> Result<StackProgram, ()> {
     let eof_pos = tokens.last().unwrap().pos().clone();
     let mut parser = Parser { tokens: tokens.into_iter().peekable(), logger, eof_pos };
     parser.parse_program()
@@ -139,11 +139,14 @@ impl<'t> Parser<'t> {
             }
         }
         // process body
-        let mut statements: Vec<StackStatement> = vec![];
-        // keep going until we see the next proc or const (since these are the only two things that aren't in scope of a procedure)
-        while let tok = self.peek_token()? && **tok != Token::Const && **tok != Token::Proc {
+        let mut statements: Vec<Positioned<StackStatement>> = vec![];
+        // keep going until we see the next proc or eof (since these are the only two things that can come after procedure termination)
+        // TODO we also use tokens being constants as a termination condition here. while techincally this is correct, since constants cannot be defined within procedures, it produces unclear error messages
+        // TODO it might be better/easier to parse to have the scope of a procedure be defined explicitly, with curly brackets or a def/fed type syntax
+        while let tok = self.peek_token()? && **tok != Token::Proc && !tok.is_eof() && **tok != Token::Const {
+            let tok_pos = tok.pos().clone();
             let statement = self.parse_statement(const_table)?;
-            statements.push(statement);
+            statements.push(Positioned { pos: tok_pos, value: statement });
         }
         // empty procedures not allowed
         if statements.is_empty() {
@@ -297,8 +300,12 @@ impl<'t> Parser<'t> {
                 self.logger.error("unknown token", t.pos().clone());
                 return Err(());
             }
+            // constants may not be defined in procedures and thus cannot be statements
+            Token::Const => {
+                self.logger.error("constants cannot be defined in procedure scope", t.pos().clone());
+                return Err(());
+            },
             // all of these are grounds for panic here, they should never be parsed as statement intialization tokens no matter what the user does
-            Token::Const => panic!(),
             Token::Proc => panic!(),
             Token::Eof => panic!(),
             Token::In => panic!(),
@@ -310,6 +317,6 @@ impl<'t> Parser<'t> {
             Token::UType(_) => panic!(),
             Token::FType(_) => panic!(),
             Token::PtrType => panic!(),
-        }) 
+        })
     }
 }

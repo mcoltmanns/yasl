@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use crate::datastructures::basicblock::BasicBlock;
 use crate::datastructures::statement::{DType, Literal};
 use crate::util::Positioned;
 
+#[derive(Debug)]
 pub enum StackStatement {
     Push { value: Literal },
     Pop,
@@ -54,7 +56,7 @@ pub struct StackProcedure {
     /// block_links[a, b] == true -> b follows a
     pub block_links: Vec<Vec<bool>>,
     /// Statements in this procedure
-    pub statements: Vec<StackStatement>
+    pub statements: Vec<Positioned<StackStatement>>
 }
 
 pub struct StackProgram {

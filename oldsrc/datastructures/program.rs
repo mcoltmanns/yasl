@@ -1,7 +1,105 @@
 use std::collections::{HashMap, HashSet, hash_map::ValuesMut};
-use crate::{datastructures::{procedure::VirtualProcedure, statement::{DType, StatementPayload, VirtualStatement}}, logger::Logger, regmachine::VReg, util::{FilePos, Positionable}};
+use crate::{datastructures::{procedure::VirtualProcedure, statement::{DType, StatementPayload, VirtualStatement}}, logger::Logger, regmachine::VReg, util::{FilePos}};
 use crate::datastructures::procedure::VRegProcedure;
 use std::fmt::Display;
+use crate::util::{Named};
+
+/// A program is a generic collection of procedures, with a couple other details
+///
+/// Programs are generic because they can target different conceptual machines.
+/// Consider Program<StackProcedure> vs. Program<VRegProcedure>.
+type StackProgram = Program<StackProcedure>;
+type RegisterProgram = Program<VRegProcedure>;
+struct Program<Proc> {
+    /// This program's entry procedure
+    entry: Option<Proc>,
+    /// This program's non-maskable interrupt handler (optional)
+    nmi: Option<Proc>,
+    /// This program's maskable hardware interrupt handler (optional)
+    hwi: Option<Proc>,
+    /// This program's maskable software interrupt handler table
+    swi_table: [Option<Proc>; 256],
+    /// Procedure table mapping names to non-special procedures
+    proc_table: HashMap<String, Proc>,
+}
+impl<Proc: Named> Program<Proc> {
+    /// Construct an empty program.
+    pub fn empty() -> Program<Proc> {
+        Program { entry: None, nmi: None, hwi: None, swi_table: [None; 256], proc_table: HashMap::new() }
+    }
+
+    // getters/setters
+    pub fn set_entry(&mut self, entry: Proc) {
+        self.entry = Some(entry);
+    }
+    pub fn get_entry(&self) -> Option<&Proc> {
+        self.entry.as_ref()
+    }
+    pub fn get_entry_mut(&mut self) -> Option<&mut Proc> {
+        self.entry.as_mut()
+    }
+    pub fn has_entry(&self) -> bool {
+        self.entry.is_some()
+    }
+
+    pub fn set_nmi(&mut self, nmi: Proc) {
+        self.nmi = Some(nmi)
+    }
+    pub fn get_nmi(&self) -> Option<&Proc> {
+        self.nmi.as_ref()
+    }
+    pub fn get_nmi_mut(&mut self) -> Option<&mut Proc> {
+        self.nmi.as_mut()
+    }
+    pub fn has_nmi(&self) -> bool {
+        self.nmi.is_some()
+    }
+
+    pub fn set_hwi(&mut self, hwi: Proc) {
+        self.hwi = Some(hwi)
+    }
+    pub fn get_hwi(&self) -> Option<&Proc> {
+        self.hwi.as_ref()
+    }
+    pub fn get_hwi_mut(&mut self) -> Option<&mut Proc> {
+        self.hwi.as_mut()
+    }
+    pub fn has_hwi(&self) -> bool {
+        self.hwi.is_some()
+    }
+
+    pub fn set_swi(&mut self, swi: Proc, swi_id: u8) {
+        self.swi_table[swi_id as usize] = Some(swi);
+    }
+    pub fn get_swi(&self, swi_id: u8) -> Option<&Proc> {
+        self.swi_table[swi_id as usize].as_ref()
+    }
+    pub fn get_swi_mut(&mut self, swi_id: u8) -> Option<&mut Proc> {
+        self.swi_table[swi_id as usize].as_mut()
+    }
+    pub fn has_swi(&self, swi_id: u8) -> bool {
+        self.swi_table[swi_id as usize].is_some()
+    }
+
+    /// Insert a procedure into the procedure table.
+    /// If the procedure table did not include this procedure, None is returned.
+    /// Otherwise, the procedure is updated and the old procedure is returned.
+    pub fn set_proc(&mut self, proc: Proc) -> Option<Proc> {
+        self.proc_table.insert(*proc.name(), proc)
+    }
+    /// Get a non-entry or -interrupt handler procedure from this program's procedure table.
+    pub fn get_proc(&mut self, proc_name: &str) -> Option<&Proc> {
+        self.proc_table.get(proc_name)
+    }
+    /// Mutable access to non-entry or -interrupt handler procedures in this program.
+    pub fn get_proc_mut(&mut self, proc_name: &str) -> Option<&mut Proc> {
+        self.proc_table.get_mut(proc_name)
+    }
+    /// Check existence of non-entry or -interrupt handler procedure in this program.
+    pub fn has_proc(&self, proc_name: &str) -> bool {
+        self.proc_table.contains_key(proc_name)
+    }
+}
 
 pub struct VirtualProgram {
     proc_table: HashMap<String, VirtualProcedure>,
@@ -78,14 +176,6 @@ impl VirtualProgram {
         // check that the entry point is defined
         if !proc_table.contains_key("main") {
             logger.error("no main procedure defined", FilePos::new("", 0, 0));
-        }
-        // check that the interrupt handler is defined
-        if !proc_table.contains_key("trapper") {
-            logger.warning("no interrupt handler defined", FilePos { name: name.to_string(), line: 0, col: 0 })
-        }
-        // if it is, make sure it has no arguments or outputs
-        else if proc_table["trapper"].types_in().len() > 0 || proc_table["trapper"].types_out().len() > 0 {
-            logger.error("interrupt handler must be zero-effect (cannot have arguments or return values)", proc_table["trapper"].statements()[0].pos().clone())
         }
 
         VirtualProgram { name: name.parse().unwrap(), proc_table, x_calls_y }

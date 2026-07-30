@@ -13,29 +13,24 @@ use crate::datastructures::TypeStack;
 use crate::logger::Logger;
 use crate::regmachine::VReg;
 use crate::regmachine::VRegAllocator;
-use crate::util::FilePos;
+use crate::util::{FilePos, Positioned};
 use crate::util::Positionable;
 
-// how will you handle interrupts? in a system-agnostic way?
-// have one interrupt-handling procedure: trap
-// it can take no parameters and can return no values (zero data stack effects)
-// on the codegen side, it must save and restore all registers - or just never touch them (but a procedure that can't touch registers won't get you very far)
-// should you give it its own zero page register block?
-// should you allow interrupt to call other procedures?
-// should you allow other procedures to call interrupt?
-// should you allow nested interrupts? no, too complex
-// do you want to allow arguments in main and in trap?
-// yes in main (the user might know about values on the stack that the compiler has no way to know about)
-// no in trap (the interrupt handler must be transparent/zero-effect)
-/*
-the problem with interrupts is they can happen anywhere, so the "caller" (the procedure that was interrupted) can't save their registers, and the interrupt has no way to know what registers it should save since it can't know at runtime what it's interrupting.
-the way around this is to know which registers the interrupt will need, and to only save and restore those
-so analyze the interrupt as its own "sub program" (own entry point, own allocation table, etc) - then the values in the allocation table will tell you exactly what hardware locations you need to save and restore, as long as you never touch anything else
-probably a good idea to emit a warning if the interrupt routine uses too many registers
-also emit a warning if the interrupt handler is undefined
- */
+// TODO see yasl/scratch for the plan for interrupts
+// you should probably make virtualprocedure (or vregprocedure) a trait, and then implement it for each type of procedure
+// the procedure types are GenericProc, EntryProc, NmiProc, HwiProc, SwiProc
+// SwiProc will definitely need an ID field or something similar to hold the code it's meant to service
+// Then you can make your program struct a little cleaner too, give it exactly one Entry, a vec or hashmap of generics, and then an Option<> for each of the interrupt handlers
+// at what level do we want to start differentiating all this stuff?
+
+// you can even go real crazy with the traits - one Procedure trait, which StackProcedure and VirtualProcedure both implement
+// when translating down to assembly, don't bother with the distinction of procedures anymore
+// GenericProc, EntryProc, and the others can be parametrized structs with trait bounds
+
 
 #[derive(Debug)]
+// TODO rename this! it's very confusing
+// probably this level of abstraction should be called StackProcedure, and then the next one down should be RegisterProcedure
 pub struct VirtualProcedure {
     name: String,
     types_in: Vec<DType>,
@@ -48,7 +43,7 @@ pub struct VirtualProcedure {
     // (from, to)
     block_links: Vec<Vec<bool>>,
     statements: Vec<VirtualStatement>,
-    block_entry_stacks: HashMap<usize, Vec<TypeStackEntry>>,
+    block_entry_stacks: HashMap<usize, Vec<TypeStackEntry>>, // this does not need to be a struct-level field
 }
 impl VirtualProcedure {
     pub fn empty(name: String, types_in: Vec<DType>, types_out: Vec<DType>, pos: FilePos) -> Self {
