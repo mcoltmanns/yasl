@@ -45,10 +45,10 @@ pub enum Token {
     In,
     Out,
     Def,
-    //Trap,
     Nmi,
     Swi,
     Hwi,
+    Extern,
 
     // names are function or constant identifiers
     Name(String),
@@ -75,7 +75,7 @@ impl From<&str> for Token {
             "sub" => Self::Sub,
             "mult" => Self::Mult,
             "div" => Self::Div,
-            "tokenizer" => Self::Mod,
+            "mod" => Self::Mod,
             "inc" => Self::Inc,
             "dec" => Self::Dec,
             "and" => Self::And,
@@ -120,6 +120,7 @@ impl From<&str> for Token {
             "nmi" => Self::Nmi,
             "swi" => Self::Swi,
             "hwi" => Self::Hwi,
+            "extern" => unimplemented!("extern declarations not supported yet"),
             word => {
                 // if we didn't match a keyword, this must be a literal or a name
                 // literals all start with - or any digit
