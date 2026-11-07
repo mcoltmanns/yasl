@@ -42,6 +42,7 @@ pub enum StackStatement {
     Geq,
 }
 
+pub enum ProcedureType { Main, Default, Swi(u8), Hwi, Nmi }
 pub struct StackProcedure {
     pub name: String,
     /// The types this procedure expects
@@ -61,15 +62,18 @@ pub struct StackProcedure {
 
 pub struct StackProgram {
     /// Entry point
-    pub(crate) entry: Positioned<StackProcedure>,
+    pub entry: Positioned<StackProcedure>,
     /// Non-maskable hardware interrupt handler
-    pub(crate) nmi: Option<Positioned<StackProcedure>>,
+    pub nmi: Option<Positioned<StackProcedure>>,
     /// Maskable hardware interrupt handler
-    pub(crate) hwi: Option<Positioned<StackProcedure>>,
+    pub hwi: Option<Positioned<StackProcedure>>,
     /// Table of maskable software interrupt handlers
-    pub(crate) swi_table: [Option<Positioned<StackProcedure>>; 256],
+    pub swi_table: [Option<Positioned<StackProcedure>>; 256],
     /// Non-interrupt-handling procedure table
-    pub(crate) proc_table: HashMap<String, Positioned<StackProcedure>>,
+    pub proc_table: HashMap<String, Positioned<StackProcedure>>,
+    /// Which procedures call which?
+    /// proc_links["foo"] == [bar] -> foo calls bar
+    pub proc_links: HashMap<String, Vec<String>>,
     /// Constant table
     pub(crate) constants: HashMap<String, Literal>
 }

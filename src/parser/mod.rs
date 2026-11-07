@@ -38,12 +38,15 @@ impl<'t> Parser<'t> {
 
     /// Recursive descent parse an array of tokens into a stack program.
     /// This program is guaranteed to be syntax-correct.
+    /// This program is not guaranteed to be type- or flow-correct - use the type- and flowcheckers for that.
     fn parse_program(&mut self) -> Result<StackProgram, ()> {
         let mut entry = None;
         let mut nmi = None;
         let mut hwi = None;
         let mut swi_table = [const { None }; 256];
-        let mut proc_table = HashMap::new();
+        // proc_table and proc_links are initialized later, during flow checking
+        let proc_table = HashMap::new();
+        let proc_links = HashMap::new();
         let mut constants = HashMap::new();
         // at the top level, either parse a constant or a procedure
         while let token = self.next_token()? && !token.is_eof() {
@@ -100,7 +103,7 @@ impl<'t> Parser<'t> {
             }
         }
         let entry = entry.map_or_else(|| Err(self.logger.error("missing entry point", self.eof_pos.clone())), |entry| Ok(entry))?;
-        Ok(StackProgram { entry, nmi, hwi, swi_table, proc_table, constants })
+        Ok(StackProgram { entry, nmi, hwi, swi_table, proc_table, proc_links, constants })
     }
 
     fn parse_constant(&mut self) -> Result<(Literal, String), ()> {
