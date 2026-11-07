@@ -1,6 +1,9 @@
 pub mod tokenizer;
 pub mod parser;
-pub mod datastructures;
+//pub mod typechecker;
+//pub mod blocker;
+//pub mod flowchecker;
+pub mod primitives;
 // TODO at this point maybe move the logger to its own file, it's looking a little overgrown
 
 pub mod logger {
@@ -162,11 +165,11 @@ pub mod util {
     
     /// Wrapper type for things that have a position in source
     pub struct Positioned<T> {
-        pub value: T,
-        pub pos: FilePos,
+        value: T,
+        pos: FilePos,
     }
     impl<T> Positioned<T> {
-        pub(crate) fn new(value: T, pos: FilePos) -> Positioned<T> {
+        pub fn new(value: T, pos: FilePos) -> Positioned<T> {
             Positioned { value, pos }
         }
         pub fn pos(&self) -> &FilePos { &self.pos }
@@ -180,6 +183,10 @@ pub mod util {
         fn deref(&self) -> &T {
             &self.value
         }
+    }
+    // implementing DerefMut allows the user to do *Positioned<T> to access T, if the ref is mutable
+    impl<T> std::ops::DerefMut for Positioned<T> {
+        fn deref_mut(&mut self) -> &mut T { &mut self.value }
     }
     
     /// Trait for things which can be named

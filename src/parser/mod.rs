@@ -2,7 +2,7 @@ pub mod datastructures;
 
 use std::collections::HashMap;
 use datastructures::{StackProgram, StackProcedure};
-use crate::datastructures::statement::{DType, Literal};
+use crate::primitives::{DType, Literal};
 use crate::logger::Logger;
 use crate::parser::datastructures::StackStatement;
 use crate::util::{FilePos, Positioned};
@@ -40,70 +40,35 @@ impl<'t> Parser<'t> {
     /// This program is guaranteed to be syntax-correct.
     /// This program is not guaranteed to be type- or flow-correct - use the type- and flowcheckers for that.
     fn parse_program(&mut self) -> Result<StackProgram, ()> {
-        let mut entry = None;
-        let mut nmi = None;
-        let mut hwi = None;
-        let mut swi_table = [const { None }; 256];
-        // proc_table and proc_links are initialized later, during flow checking
-        let proc_table = HashMap::new();
-        let proc_links = HashMap::new();
+        let mut program = StackProgram::empty();
         let mut constants = HashMap::new();
         // at the top level, either parse a constant or a procedure
         while let token = self.next_token()? && !token.is_eof() {
             match *token {
                 Token::Const => {
                     let (constant, name) = self.parse_constant()?;
-                    constants.insert(name, constant);
+                    // constants may not be redefined
+                    if constants.insert(name, constant).is_some() {
+                        self.logger.error("illegal constant redefinition", token.pos().clone());
+                        return Err(())
+                    }
                 }
                 Token::Proc => {
                     let proc = self.parse_procedure(&mut constants)?;
-                    match proc.name.as_str() {
-                        "main" => {
-                            if entry.is_some() {
-                                panic!("duplicate main procedure")
-                            }
-                            entry = Some(proc);
+                    let proc_pos = proc.pos().clone();
+                    program.add_procedure(proc).map_err(
+                        |s| {
+                            self.logger.error(&s, proc_pos);
                         }
-                        "nmi" => {
-                            if nmi.is_some() {
-                                panic!("duplicate nmi procedure")
-                            }
-                            nmi = Some(proc);
-                        }
-                        "hwi" => {
-                            if hwi.is_some() {
-                                panic!("duplicate hwi procedure")
-                            }
-                            hwi = Some(proc);
-                        }
-                        _ => {
-                            if proc.name.starts_with("swi") {
-                                let id_str = proc.name.strip_prefix("swi").unwrap();
-                                match id_str.parse::<usize>() {
-                                    Ok(id) => {
-                                        if id > 255 || id < 0 {
-                                            panic!("software interrupt handler ID out of range")
-                                        }
-                                        if swi_table[id].is_some() {
-                                            panic!("software interrupt handler {} was already defined", id)
-                                        }
-                                        swi_table[id] = Some(proc)
-                                    }
-                                    Err(e) => {
-                                        self.logger.error(&format!("software interrupt handler IDs must be integers in range 0-255 ({})", e), proc.pos().clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    )?;
                 }
                 _ => {
                     panic!("unexpected token")
                 }
             }
         }
-        let entry = entry.map_or_else(|| Err(self.logger.error("missing entry point", self.eof_pos.clone())), |entry| Ok(entry))?;
-        Ok(StackProgram { entry, nmi, hwi, swi_table, proc_table, proc_links, constants })
+        program.get_entry_id().ok_or_else(|| self.logger.error("missing program entry point", self.eof_pos.clone()))?;
+        Ok(program)
     }
 
     fn parse_constant(&mut self) -> Result<(Literal, String), ()> {
@@ -129,6 +94,7 @@ impl<'t> Parser<'t> {
         let mut types_out = vec![];
         let name_tok = self.next_token()?;
         let this_pos = name_tok.pos().clone();
+        let mut is_extern = false;
         // process declaration (consumes from proc up to and including def)
         match &*name_tok {
             Token::Name(n) => {
@@ -141,6 +107,14 @@ impl<'t> Parser<'t> {
                 self.logger.error("expected procedure name", name_tok.pos().clone());
             }
         }
+        // check if that was an extern declaration
+        if **self.peek_token()? == Token::Extern {
+            self.next_token()?;
+            is_extern = true;
+        }
+        let mut proc = StackProcedure::new(name, is_extern, types_in, types_out).map_err(
+            |s| self.logger.error(&s, this_pos.clone()),
+        )?;
         // process body
         let mut statements: Vec<Positioned<StackStatement>> = vec![];
         // keep going until we see the next proc or eof (since these are the only two things that can come after procedure termination)
@@ -149,28 +123,21 @@ impl<'t> Parser<'t> {
         while let tok = self.peek_token()? && **tok != Token::Proc && !tok.is_eof() && **tok != Token::Const {
             let tok_pos = tok.pos().clone();
             let statement = self.parse_statement(const_table)?;
-            statements.push(Positioned { pos: tok_pos, value: statement });
+            statements.push(Positioned::new(statement, tok_pos));
         }
-        // empty procedures not allowed
-        if statements.is_empty() {
+        // empty non-extern procedures not allowed
+        if statements.is_empty() && !is_extern {
             self.logger.error("procedure has no body", this_pos.clone());
             return Err(());
         }
-        // everything else will be populated further down the line
-        Ok(
-            Positioned {
-                pos: this_pos,
-                value: StackProcedure {
-                    name,
-                    types_in,
-                    types_out,
-                    jump_table: HashMap::default(),
-                    blocks: vec![],
-                    block_links: vec![],
-                    statements,
-                }
-            }
-        )
+        // and extern procedures must be empty
+        if !statements.is_empty() && is_extern {
+            self.logger.error("procedure declared as extern may not have a body", this_pos.clone());
+            return Err(());
+        }
+        proc.set_statements(statements);
+        // the above was "nOn-RuStLiKe" boo hoo :'(
+        Ok(Positioned::new(proc, this_pos))
     }
 
     fn parse_type_list(&mut self, terminator: Token) -> Result<Vec<DType>, ()> {
@@ -215,6 +182,7 @@ impl<'t> Parser<'t> {
             Token::Nmi => unimplemented!(),
             Token::Swi => unimplemented!(),
             Token::Hwi => unimplemented!(),
+            Token::Extern => unimplemented!(),
             Token::Push => {
                 let name_t = self.next_token()?;
                 match &*name_t {

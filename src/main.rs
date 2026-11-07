@@ -1,50 +1,46 @@
-use yasl::datastructures::program::VRegProgram;
-use yasl::datastructures::program::VirtualProgram;
-use yasl::logger::{Logger, StdoutLogger};
-use yasl::target::Target;
-use yasl::target::mos6502::{MOS6502Target};
-use yasl::target::x86_64::{X86_64Target};
-use yasl::tokenizer;
-use yasl::parser;
 use std::env;
 use std::fs;
-use std::fs::File;
-use std::io::Write;
-use yasl::util::{FilePos, Positionable};
+use std::path::PathBuf;
+use std::process::exit;
+use yasl::logger::{Logger, StderrLogger};
+use yasl::{parser, tokenizer};
+use yasl::util::source::SourceMap;
 
 fn main() {
     println!("This is yasl {}", env!("CARGO_PKG_VERSION"));
 
-    let mut logger = StdoutLogger::new();
+    let mut logger = StderrLogger::default();
 
     let args: Vec<String> = env::args().collect();
+    let src_name = &args[1];
 
-    let src_path = std::path::Path::new(&args[1]);
-    let src_path_str = src_path.to_str().unwrap();
-    let src_string = match fs::read_to_string(src_path) {
-        Ok(s) => s,
-        Err(err) => {
-            println!("unable to open file \"{}\": {}\ncompilation failed", src_path.to_str().unwrap(), err);
-            return;
-        }
-    };
+    let mut src_map = SourceMap::default();
+    let src_id = src_map.add(PathBuf::from(src_name));
+    let src_file = src_map.get_file(src_id);
+    let src_string = src_file.get_contents().unwrap();
 
     // tokenize the input
-    let mut tokenizer = tokenizer::Tokenizer::new(src_path.to_str().unwrap().to_string(), src_string);
-    let tokens = tokenizer.run();
+    let tokens = tokenizer::tokenize(src_string, src_id);
 
-    // parse the input into statements
-    let mut parser = parser::Parser::new(tokens);
-    parser.parse_tokens(&mut logger);
+    let bail = |logger: &mut dyn Logger| -> ! {
+        logger.flush(&src_map);
+        exit(1)
+    };
 
-    // not worth continuing if the syntax is wrong
-    if logger.has_error() {
-        println!("compilation failed");
-        return;
-    }
+    // parse the input
+    let mut stackprogram = parser::parse(tokens, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+
+    //// complete the stack program with basic block info
+    //blocker::run(&mut stackprogram, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+
+    //// do control flow checks
+    //flowchecker::run(&mut stackprogram, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+
+    // build a stack program from the tokenized input
+    //let stack_program = StackProgram::from_tokens(tokens, &mut logger)?;
 
     // build the procedure table and derive a signature table from it
-    let mut ir_program = VirtualProgram::new(src_path_str, parser.statements(), &mut logger);
+    /*let mut ir_program = VirtualProgram::new(src_path_str, parser.statements(), &mut logger);
     let sig_table = ir_program.sig_table();
 
     // for every procedure, link the blocks and build the jump table
@@ -91,6 +87,6 @@ fn main() {
     }
     else {
         panic!("unable to create output file");
-    }
+    }*/
     println!("done");
 }
