@@ -3,35 +3,35 @@ pub mod datastructures;
 use std::collections::HashMap;
 use datastructures::{StackProgram, StackProcedure};
 use crate::primitives::{DType, Literal};
-use crate::logger::Logger;
+use crate::logger::{LogEvent, Logbook};
 use crate::parser::datastructures::StackStatement;
 use crate::util::{FilePos, Positioned};
 use crate::tokenizer::datastructures::Token;
 
-pub fn parse(tokens: Vec<Positioned<Token>>, logger: &mut dyn Logger) -> Result<StackProgram, ()> {
+pub fn parse(tokens: Vec<Positioned<Token>>, logbook: &mut Logbook) -> Result<StackProgram, LogEvent> {
     let eof_pos = tokens.last().unwrap().pos().clone();
-    let mut parser = Parser { tokens: tokens.into_iter().peekable(), logger, eof_pos };
+    let mut parser = Parser { tokens: tokens.into_iter().peekable(), logbook, eof_pos };
     parser.parse_program()
 }
 
 struct Parser<'t> {
     tokens: std::iter::Peekable<std::vec::IntoIter<Positioned<Token>>>,
-    logger: &'t mut dyn Logger,
+    logbook: &'t mut Logbook,
     eof_pos: FilePos,
 }
 impl<'t> Parser<'t> {
-    fn peek_token(&mut self) -> Result<&Positioned<Token>, ()> {
-        self.tokens.peek().ok_or_else(|| self.logger.error("unexpected EOF", self.eof_pos.clone()))
+    fn peek_token(&mut self) -> Result<&Positioned<Token>, LogEvent> {
+        self.tokens.peek().ok_or_else(|| { LogEvent::error("unexpected EOF", self.eof_pos.clone()) })
     }
-    fn next_token(&mut self) -> Result<Positioned<Token>, ()> {
-        self.tokens.next().ok_or_else(|| self.logger.error("unexpected EOF", self.eof_pos.clone()))
+    fn next_token(&mut self) -> Result<Positioned<Token>, LogEvent> {
+        self.tokens.next().ok_or_else(|| { LogEvent::error("unexpected EOF", self.eof_pos.clone()) })
     }
     /// Consumes a token!
-    fn expect_token(&mut self, expected: Token) -> Result<bool, ()> {
+    fn expect_token(&mut self, expected: Token) -> Result<bool, LogEvent> {
         let have = self.next_token()?;
         let cond = *have == expected;
         if !cond {
-            self.logger.error(&format!("expected {:?}, got {:?}", *have, expected), have.pos().clone());
+            return Err(LogEvent::error(&format!("expected {:?}, got {:?}", *have, expected), have.pos().clone()));
         }
         Ok(cond)
     }
@@ -39,56 +39,50 @@ impl<'t> Parser<'t> {
     /// Recursive descent parse an array of tokens into a stack program.
     /// This program is guaranteed to be syntax-correct.
     /// This program is not guaranteed to be type- or flow-correct - use the type- and flowcheckers for that.
-    fn parse_program(&mut self) -> Result<StackProgram, ()> {
+    fn parse_program(&mut self) -> Result<StackProgram, LogEvent> {
         let mut program = StackProgram::empty();
         let mut constants = HashMap::new();
         // at the top level, either parse a constant or a procedure
-        while let token = self.next_token()? && !token.is_eof() {
+        while let mut token = self.next_token()? && !token.is_eof() {
             match *token {
                 Token::Const => {
                     let (constant, name) = self.parse_constant()?;
-                    // constants may not be redefined
+                    // constants may not be redefined, but this is a recoverable error
                     if constants.insert(name, constant).is_some() {
-                        self.logger.error("illegal constant redefinition", token.pos().clone());
-                        return Err(())
+                        self.logbook.write(LogEvent::error("illegal constant redefinition", token.pos().clone()));
                     }
                 }
                 Token::Proc => {
                     let proc = self.parse_procedure(&mut constants)?;
                     let proc_pos = proc.pos().clone();
-                    program.add_procedure(proc).map_err(
-                        |s| {
-                            self.logger.error(&s, proc_pos);
-                        }
-                    )?;
+                    program.add_procedure(proc)?;
                 }
                 _ => {
                     panic!("unexpected token")
                 }
             }
         }
-        program.get_entry_id().ok_or_else(|| self.logger.error("missing program entry point", self.eof_pos.clone()))?;
+        program.get_entry_id()?;
         Ok(program)
     }
 
-    fn parse_constant(&mut self) -> Result<(Literal, String), ()> {
+    fn parse_constant(&mut self) -> Result<(Literal, String), LogEvent> {
         let name_tok = self.next_token()?;
         let type_tok = self.next_token()?;
         let lit_tok = self.next_token()?;
         match &*name_tok {
             Token::Name(name) => {
-                let dtype = DType::from_token(&*type_tok).map_err(|e| self.logger.error(&e, type_tok.pos().clone()))?;
-                let literal = Literal::from_token(&*lit_tok, &dtype).map_err(|e| self.logger.error(&e, lit_tok.pos().clone()))?;
+                let dtype = DType::from_token(&type_tok)?;
+                let literal = Literal::from_token(&lit_tok, &dtype)?;
                 Ok((literal, name.clone()))
             }
             _ => {
-                self.logger.error("expected constant name", name_tok.pos().clone());
-                Err(())
+                Err(LogEvent::error("expected constant name", name_tok.pos().clone()))
             }
         }
     }
 
-    fn parse_procedure(&mut self, const_table: &mut HashMap<String, Literal>) -> Result<Positioned<StackProcedure>, ()> {
+    fn parse_procedure(&mut self, const_table: &mut HashMap<String, Literal>) -> Result<Positioned<StackProcedure>, LogEvent> {
         let mut name = "".to_string();
         let mut types_in = vec![];
         let mut types_out = vec![];
@@ -104,7 +98,7 @@ impl<'t> Parser<'t> {
                 types_out = self.parse_type_list(Token::Def)?;
             }
             _ => {
-                self.logger.error("expected procedure name", name_tok.pos().clone());
+                LogEvent::error("expected procedure name", name_tok.pos().clone());
             }
         }
         // check if that was an extern declaration
@@ -113,7 +107,7 @@ impl<'t> Parser<'t> {
             is_extern = true;
         }
         let mut proc = StackProcedure::new(name, is_extern, types_in, types_out).map_err(
-            |s| self.logger.error(&s, this_pos.clone()),
+            |s| LogEvent::error(&s, this_pos.clone()),
         )?;
         // process body
         let mut statements: Vec<Positioned<StackStatement>> = vec![];
@@ -127,31 +121,27 @@ impl<'t> Parser<'t> {
         }
         // empty non-extern procedures not allowed
         if statements.is_empty() && !is_extern {
-            self.logger.error("procedure has no body", this_pos.clone());
-            return Err(());
+            return Err(LogEvent::error("procedure has no body", this_pos.clone()));
         }
         // and extern procedures must be empty
         if !statements.is_empty() && is_extern {
-            self.logger.error("procedure declared as extern may not have a body", this_pos.clone());
-            return Err(());
+            return Err(LogEvent::error("procedure declared as extern may not have a body", this_pos.clone()));
         }
-        proc.set_statements(statements);
-        // the above was "nOn-RuStLiKe" boo hoo :'(
+        // put the statements in the procedure
+        // this performs procedure-local flow checking (basic blocks and jump table)
+        proc.set_statements(statements)?;
         Ok(Positioned::new(proc, this_pos))
     }
 
-    fn parse_type_list(&mut self, terminator: Token) -> Result<Vec<DType>, ()> {
+    fn parse_type_list(&mut self, terminator: Token) -> Result<Vec<DType>, LogEvent> {
         let mut types = vec![];
         while let next = self.next_token()? && *next != terminator {
-            match DType::from_token(&next) {
-                Ok(dtype) => types.push(dtype),
-                Err(e) => return Err(self.logger.error(&e, next.pos().clone())),
-            }
+            types.push(DType::from_token(&next)?);
         }
         Ok(types)
     }
 
-    fn parse_statement(&mut self, const_table: &mut HashMap<String, Literal>) -> Result<StackStatement, ()> {
+    fn parse_statement(&mut self, const_table: &mut HashMap<String, Literal>) -> Result<StackStatement, LogEvent> {
         let t = self.next_token()?;
         Ok(match &*t {
             Token::Pop => StackStatement::Pop,
@@ -187,26 +177,26 @@ impl<'t> Parser<'t> {
                 let name_t = self.next_token()?;
                 match &*name_t {
                     Token::Name(name) => {
-                        let value = const_table.get(name).ok_or_else(|| self.logger.error("undefined constant", name_t.pos().clone()))?;
+                        let value = const_table.get(name).ok_or_else(|| LogEvent::error("undefined constant", name_t.pos().clone()))?;
                         StackStatement::Push { value: value.clone() }
                     }
                     _ => {
                         // try to parse a literal if we couldn't find a constant
-                        let dtype = DType::from_token(&*name_t).map_err(|e| self.logger.error(&e, name_t.pos().clone()))?;
+                        let dtype = DType::from_token(&name_t)?;
                         let lit_t = self.next_token()?;
-                        let literal = Literal::from_token(&*lit_t, &dtype).map_err(|e| self.logger.error(&e, lit_t.pos().clone()))?;
+                        let literal = Literal::from_token(&lit_t, &dtype)?;
                         StackStatement::Push { value: literal }
                     }
                 }
             }
             Token::Load => {
                 let type_t = self.next_token()?;
-                let dtype = DType::from_token(&*type_t).map_err(|e| self.logger.error(&e, type_t.pos().clone()))?;
+                let dtype = DType::from_token(&type_t)?;
                 StackStatement::Load { kind: dtype }
             }
             Token::Store => {
                 let type_t = self.next_token()?;
-                let dtype = DType::from_token(&*type_t).map_err(|e| self.logger.error(&e, type_t.pos().clone()))?;
+                let dtype = DType::from_token(&type_t)?;
                 StackStatement::Store { kind: dtype }
             }
             Token::Label => {
@@ -216,8 +206,7 @@ impl<'t> Parser<'t> {
                         StackStatement::Label { name: name.clone() }
                     }
                     _ => {
-                        self.logger.error("expected label name", name_t.pos().clone());
-                        return Err(());
+                        return Err(LogEvent::error("expected label name", name_t.pos().clone()));
                     }
                 }
             }
@@ -228,8 +217,7 @@ impl<'t> Parser<'t> {
                         StackStatement::Jump { dest: name.clone() }
                     }
                     _ => {
-                        self.logger.error("missing jump destination", dest_name_t.pos().clone());
-                        return Err(());
+                        return Err(LogEvent::error("missing jump destination", dest_name_t.pos().clone()));
                     }
                 }
             }
@@ -240,8 +228,7 @@ impl<'t> Parser<'t> {
                         StackStatement::Jumpif { dest: name.clone() }
                     }
                     _ => {
-                        self.logger.error("missing jump destination", dest_name_t.pos().clone());
-                        return Err(());
+                        return Err(LogEvent::error("missing jump destination", dest_name_t.pos().clone()));
                     }
                 }
             }
@@ -252,29 +239,26 @@ impl<'t> Parser<'t> {
                         StackStatement::Call { dest: name.clone(), t_in: vec![], t_out: vec![] } // in/out types are built later by the typechecker
                     }
                     _ => {
-                        self.logger.error("missing call destination", dest_name_t.pos().clone());
-                        return Err(());
+                        return Err(LogEvent::error("missing call destination", dest_name_t.pos().clone()));
                     }
                 }
             }
             Token::Cast => {
                 let into_t = self.next_token()?;
-                let into_dt = DType::from_token(&*into_t).map_err(|e| self.logger.error(&e, into_t.pos().clone()))?;
+                let into_dt = DType::from_token(&into_t)?;
                 StackStatement::Cast { to: into_dt }
             }
             Token::Conv => {
                 let into_t = self.next_token()?;
-                let into_dt = DType::from_token(&*into_t).map_err(|e| self.logger.error(&e, into_t.pos().clone()))?;
+                let into_dt = DType::from_token(&into_t)?;
                 StackStatement::Conv { to: into_dt }
             }
             Token::Unknown(s) => {
-                self.logger.error("unknown token", t.pos().clone());
-                return Err(());
+                return Err(LogEvent::error("unknown token", t.pos().clone()));
             }
             // constants may not be defined in procedures and thus cannot be statements
             Token::Const => {
-                self.logger.error("constants cannot be defined in procedure scope", t.pos().clone());
-                return Err(());
+                return Err(LogEvent::error("constants cannot be defined in procedure scope", t.pos().clone()));
             },
             // all of these are grounds for panic here, they should never be parsed as statement intialization tokens no matter what the user does
             Token::Proc => panic!(),

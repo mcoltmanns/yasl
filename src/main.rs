@@ -2,14 +2,14 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
-use yasl::logger::{Logger, StderrLogger};
 use yasl::{parser, tokenizer};
+use yasl::logger::Logbook;
 use yasl::util::source::SourceMap;
 
 fn main() {
     println!("This is yasl {}", env!("CARGO_PKG_VERSION"));
 
-    let mut logger = StderrLogger::default();
+    let mut logger = Logbook::default();
 
     let args: Vec<String> = env::args().collect();
     let src_name = &args[1];
@@ -22,13 +22,17 @@ fn main() {
     // tokenize the input
     let tokens = tokenizer::tokenize(src_string, src_id);
 
-    let bail = |logger: &mut dyn Logger| -> ! {
+    let bail = |logger: &mut Logbook| -> ! {
         logger.flush(&src_map);
         exit(1)
     };
 
     // parse the input
-    let mut stackprogram = parser::parse(tokens, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+    let mut stackprogram = parser::parse(tokens, &mut logger).unwrap_or_else(
+        |e| {
+            logger.write(e);
+            bail(&mut logger)
+        });
 
     //// complete the stack program with basic block info
     //blocker::run(&mut stackprogram, &mut logger).unwrap_or_else(|_| bail(&mut logger));
