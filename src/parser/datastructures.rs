@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 use petgraph::{graph, Graph};
 use petgraph::data::Build;
 use petgraph::dot::{Config, Dot};
+use petgraph::stable_graph::StableGraph;
 use crate::logger::{LogEvent, Logbook};
 use crate::primitives::{BasicBlock, DType, Literal};
 use crate::util::{FilePos, Positioned};
@@ -74,7 +75,7 @@ pub struct StackProcedure {
     /// Statements in this procedure
     statements: Vec<Positioned<StackStatement>>,
     /// Basic blocks in this procedure
-    blocks: Graph<BasicBlock, ()>,
+    blocks: StableGraph<BasicBlock, ()>, // use stablegraph so block ids aren't invalidated upon delete
     /// Map label names to node indices in the block graph
     label_map: HashMap<String, graph::NodeIndex>
 }
@@ -117,7 +118,7 @@ impl StackProcedure {
             types_in,
             types_out,
             statements: Vec::new(),
-            blocks: Graph::new(),
+            blocks: StableGraph::new(),
             label_map: HashMap::new(),
         })
     }
@@ -180,6 +181,7 @@ impl StackProcedure {
         // rets have no edges
         // everything else has a fallthrough edge
         let mut block_idx_iter = self.blocks.node_indices().peekable(); // this iterator is in the order we added our blocks, so in source order
+        let mut edges = vec![];
         while let Some(block_idx) = block_idx_iter.next() {
             let block = &self.blocks[block_idx];
             let last_statement = &self.statements[block.start() + block.length() - 1];
@@ -188,15 +190,15 @@ impl StackProcedure {
                 StackStatement::Jump { dest } => {
                     // jumps have edges to their target
                     let dest_block_idx = self.label_map[dest];
-                    self.blocks.add_edge(block_idx, dest_block_idx, ());
+                    edges.push((block_idx, dest_block_idx));
                 }
                 StackStatement::Jumpif { dest } => {
                     // jumpifs have edges to their target
                     let dest_block_idx = self.label_map[dest];
-                    self.blocks.add_edge(block_idx, dest_block_idx, ());
+                    edges.push((block_idx, dest_block_idx));
                     // and a fallthrough to the next block
                     if let Some(&next_block_idx) = block_idx_iter.peek() {
-                        self.blocks.add_edge(block_idx, next_block_idx, ());
+                        edges.push((block_idx, next_block_idx));
                     }
                     else {
                         return Err(LogEvent::error("no fallthrough after conditional jump", last_statement_pos))
@@ -205,13 +207,16 @@ impl StackProcedure {
                 StackStatement::Ret { .. } => {}
                 _ => {
                     if let Some(&next_block_idx) = block_idx_iter.peek() {
-                        self.blocks.add_edge(block_idx, next_block_idx, ());
+                        edges.push((block_idx, next_block_idx));
                     }
                     else {
                         return Err(LogEvent::error("non-terminating statement does not have a successor", last_statement_pos))
                     }
                 }
             }
+        }
+        for e in edges.iter() {
+            self.blocks.add_edge(e.0, e.1, ());
         }
         println!("{}", self.name);
         println!("{:?}", Dot::with_config(&self.blocks, &[Config::EdgeNoLabel]));
