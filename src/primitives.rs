@@ -1,8 +1,8 @@
 /// File for general primitive datatypes
 use half::f16;
 use crate::logger::LogEvent;
-use crate::tokenizer::datastructures::Token;
 use crate::util::Positioned;
+use crate::irs::token::Token;
 
 #[derive(Debug, Clone)]
 pub enum Literal {
@@ -153,7 +153,7 @@ impl From<&Literal> for DType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BasicBlock {
     /// All programs are a map of procedures, and each procedure is a vec of statements
     /// So every basic block in a program can be defined by its parent procedure's id, its starting index, and its length

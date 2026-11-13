@@ -1,3 +1,6 @@
+/*
+Definition file for tokens produced by the tokenizer.
+ */
 use std::cmp::PartialEq;
 
 /// Data held by a token

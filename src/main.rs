@@ -1,9 +1,14 @@
+use std::collections::HashSet;
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
+use petgraph::{Direction, EdgeDirection};
+use petgraph::visit::IntoNeighborsDirected;
 use yasl::{parser, tokenizer};
-use yasl::logger::Logbook;
+use yasl::irs::stack::procedure::StackProcedure;
+use yasl::logger::{LogEvent, Logbook};
+use yasl::primitives::BasicBlock;
+use yasl::util::Positioned;
 use yasl::util::source::SourceMap;
 
 fn main() {
@@ -34,35 +39,45 @@ fn main() {
             bail(&mut logger)
         });
 
-    //// complete the stack program with basic block info
-    //blocker::run(&mut stackprogram, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+    // for each procedure, build its flow graph and check flow
+    for proc in stackprogram.get_procedures_mut() {
+        // build the flow graph and get all the blocks in the procedure
+        let all_set: HashSet<BasicBlock> = proc.build_flow_graph().unwrap_or_else(
+            |e| {
+                logger.write(e);
+                bail(&mut logger);
+            }
+        ).node_weights().cloned().collect();
+        // get the blocks that are reachable
+        let reachable_set: HashSet<BasicBlock> = proc.reachable_blocks().iter().cloned().collect();
+        // then blocks which are in all but not in reachable are dead code
+        for block in all_set.difference(&reachable_set) {
+            let first_st_pos = proc.statements_in_block(*block)[0].pos().clone();
+            logger.write(LogEvent::warning("unreachable code", first_st_pos));
+        }
+    }
 
-    //// do control flow checks
-    //flowchecker::run(&mut stackprogram, &mut logger).unwrap_or_else(|_| bail(&mut logger));
+    // then check flow between procedures
+    // build flow graph
+    let all_proc_is: HashSet<usize> = stackprogram.build_flow_graph().cloned().unwrap_or_else(
+        |e| {
+            logger.write(e);
+            bail(&mut logger);
+        }
+    ).node_weights().cloned().collect();
+    let reachable_proc_is: HashSet<usize> = stackprogram.reachable_procedure_is().iter().cloned().collect();
+    for proc_i in all_proc_is.difference(&reachable_proc_is) {
+        let proc_pos = stackprogram.get_procedures()[*proc_i].pos().clone();
+        logger.write(LogEvent::warning("unreachable code", proc_pos));
+    }
+    logger.flush(&src_map);
 
-    // build a stack program from the tokenized input
-    //let stack_program = StackProgram::from_tokens(tokens, &mut logger)?;
-
-    // build the procedure table and derive a signature table from it
-    /*let mut ir_program = VirtualProgram::new(src_path_str, parser.statements(), &mut logger);
-    let sig_table = ir_program.sig_table();
+    // now we are ready to typecheck!
 
     // for every procedure, link the blocks and build the jump table
     // make sure all blocks are reachable
-    // and then do type resolution and checking
-    for p in ir_program.procedures_mut() {
-        p.build_blocks_and_jumps(&mut logger);
-        p.link_blocks(&mut logger);
-        p.check_block_reachability(&mut logger);
-        p.compute_block_stack_effets(&sig_table, &mut logger);
-        p.resolve_types(&sig_table, &mut logger);
-    }
-    // not worth continuing if the types are wrong
-    if logger.has_error() {
-        println!("compilation failed");
-        return;
-    }
 
+    /*
     // lower the program to virtual register form
     // in theory nothing can go wrong here
     let vreg_program = VRegProgram::lower(src_path_str, &ir_program, &logger);

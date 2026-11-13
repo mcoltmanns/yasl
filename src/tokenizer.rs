@@ -1,8 +1,6 @@
-pub mod datastructures;
-
-use datastructures::*;
 use crate::util::{FilePos, Positioned};
 use crate::util::source::FileId;
+use crate::irs::token::Token;
 
 /// Implementation of the tokenizer
 #[derive(Debug)]

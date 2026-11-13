@@ -1,52 +1,12 @@
-use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
-use petgraph::{graph, Graph};
-use petgraph::data::Build;
-use petgraph::dot::{Config, Dot};
-use petgraph::stable_graph::StableGraph;
-use crate::logger::{LogEvent, Logbook};
-use crate::primitives::{BasicBlock, DType, Literal};
-use crate::util::{FilePos, Positioned};
-
-#[derive(Debug)]
-pub enum StackStatement {
-    Push { value: Literal },
-    Pop,
-    Dup,
-    Swap,
-    Load { kind: DType },
-    Store { kind: DType },
-    Label { name: String },
-    Jump { dest: String },
-    Jumpif { dest: String },
-    Call { dest: String, t_in: Vec<DType>, t_out: Vec<DType> },
-    Ret { t_out: Vec<DType>},
-    Cast { to: DType },
-    Conv { to: DType },
-
-    Add,
-    Sub,
-    Div,
-    Mult,
-    Mod,
-    Inc,
-    Dec,
-    And,
-    Or,
-    Not,
-    Xor,
-    Bsl,
-    Bsr,
-    Rol,
-    Ror,
-    Eq,
-    Neq,
-    Lt,
-    Leq,
-    Gt,
-    Geq,
-}
+use petgraph::Direction;
+use petgraph::prelude::StableGraph;
+use petgraph::stable_graph::NodeIndex;
+use petgraph::visit::Visitable;
+use crate::logger::LogEvent;
+use crate::primitives::{BasicBlock, DType};
+use crate::util::Positioned;
+use crate::irs::stack::statement::StackStatement;
 
 #[derive(Debug)]
 pub enum ProcedureKind { Main, Default, Swi(u8), Hwi, Nmi }
@@ -76,11 +36,12 @@ pub struct StackProcedure {
     statements: Vec<Positioned<StackStatement>>,
     /// Basic blocks in this procedure
     blocks: StableGraph<BasicBlock, ()>, // use stablegraph so block ids aren't invalidated upon delete
+    entry_block_id: Option<NodeIndex>,
     /// Map label names to node indices in the block graph
-    label_map: HashMap<String, graph::NodeIndex>
+    label_map: HashMap<String, NodeIndex>
 }
 impl StackProcedure {
-    pub fn new(name: String, external: bool, types_in: Vec<DType>, types_out: Vec<DType>) -> Result<Self, String> { // yes this return type breaks with convention but an empty procedure can be created before we know its position
+    pub fn new(name: String, external: bool, types_in: Vec<DType>, types_out: Vec<DType>) -> Result<Self, String> { // yes this return type breaks with convention but an empty procedure can be created before we know its position, so we can't return a LogEvent
         let mut kind: ProcedureKind = ProcedureKind::Default;
         match name.as_str() {
             "main" => {
@@ -119,14 +80,15 @@ impl StackProcedure {
             types_out,
             statements: Vec::new(),
             blocks: StableGraph::new(),
+            entry_block_id: None,
             label_map: HashMap::new(),
         })
     }
 
-    /// Set statements for this procedure
-    /// Also recomputes the basic blocks, their flow graph, and the jump table
-    pub fn set_statements(&mut self, statements: Vec<Positioned<StackStatement>>) -> Result<(), LogEvent> {
-        self.statements = statements;
+    /// Tries to build a control flow graph for this procedure
+    /// If fails, returns a LogEvent explaining why
+    /// If it succeeds, flow through this procedure is well-formed
+    pub fn build_flow_graph(&mut self) -> Result<&StableGraph<BasicBlock, ()>, LogEvent> {
         self.blocks.clear();
         self.label_map.clear();
         // do three passes:
@@ -169,6 +131,10 @@ impl StackProcedure {
             }
             // save node to the graph
             let node_idx = self.blocks.add_node(block);
+            // if the entry id is none, set as your entry id (we iterate in source order so this is correct)
+            if self.entry_block_id.is_none() {
+                self.entry_block_id = Some(node_idx);
+            }
             // if your first statement is a label, save your graph id for the third pass
             let first_statement = &*self.statements[block_start_idx];
             if let StackStatement::Label { name } = first_statement {
@@ -181,21 +147,31 @@ impl StackProcedure {
         // rets have no edges
         // everything else has a fallthrough edge
         let mut block_idx_iter = self.blocks.node_indices().peekable(); // this iterator is in the order we added our blocks, so in source order
-        let mut edges = vec![];
+        let mut edges = vec![]; // have to collect the edges into an array first because we can't modify the graph while iterating over node indices
         while let Some(block_idx) = block_idx_iter.next() {
             let block = &self.blocks[block_idx];
-            let last_statement = &self.statements[block.start() + block.length() - 1];
-            let last_statement_pos = last_statement.pos().clone(); // for error reporting
-            match &**last_statement {
-                StackStatement::Jump { dest } => {
+            let last_statement_pos = self.statements[block.start() + block.length() - 1].pos().clone(); // for error reporting
+            let last_statement = &mut *self.statements[block.start() + block.length() - 1];
+            match last_statement {
+                StackStatement::Jump { dest_name: dest, dest_idx } => {
                     // jumps have edges to their target
-                    let dest_block_idx = self.label_map[dest];
-                    edges.push((block_idx, dest_block_idx));
+                    if let Some(&dest_block_idx) = self.label_map.get(dest) {
+                        *dest_idx = self.blocks[dest_block_idx].start().into(); // point the statement to the index of the first statement of the destination block
+                        edges.push((block_idx, dest_block_idx));
+                    }
+                    else {
+                        return Err(LogEvent::error(&format!("undefined jump target \"{}\"", dest), last_statement_pos.clone()))
+                    }
                 }
-                StackStatement::Jumpif { dest } => {
+                StackStatement::Jumpif { dest_name: dest, dest_idx  } => {
                     // jumpifs have edges to their target
-                    let dest_block_idx = self.label_map[dest];
-                    edges.push((block_idx, dest_block_idx));
+                    if let Some(&dest_block_idx) = self.label_map.get(dest) {
+                        *dest_idx = self.blocks[dest_block_idx].start().into(); // point the statement to the index of the first statement of the destination block
+                        edges.push((block_idx, dest_block_idx));
+                    }
+                    else {
+                        return Err(LogEvent::error(&format!("undefined jump target \"{}\"", dest), last_statement_pos.clone()))
+                    }
                     // and a fallthrough to the next block
                     if let Some(&next_block_idx) = block_idx_iter.peek() {
                         edges.push((block_idx, next_block_idx));
@@ -204,7 +180,7 @@ impl StackProcedure {
                         return Err(LogEvent::error("no fallthrough after conditional jump", last_statement_pos))
                     }
                 }
-                StackStatement::Ret { .. } => {}
+                StackStatement::Ret { .. } => {} // returns don't need aligning because they return to their calling scope, we can figure this out implicitly
                 _ => {
                     if let Some(&next_block_idx) = block_idx_iter.peek() {
                         edges.push((block_idx, next_block_idx));
@@ -218,88 +194,79 @@ impl StackProcedure {
         for e in edges.iter() {
             self.blocks.add_edge(e.0, e.1, ());
         }
-        println!("{}", self.name);
-        println!("{:?}", Dot::with_config(&self.blocks, &[Config::EdgeNoLabel]));
-        Ok(())
+        //println!("{}", self.name);
+        //println!("{:?}", Dot::with_config(&self.blocks, &[Config::EdgeNoLabel]));
+        Ok(&self.blocks)
     }
 
-    pub fn is_extern(&self) -> bool {
+    /// Get all blocks that can be reached in this procedure
+    pub fn reachable_blocks(&self) -> Vec<BasicBlock> {
+        let mut reachable = vec![self.blocks[self.entry_block_id.expect("procedure has no entry block, did you remember to build the flow graph?")]];
+        for block_idx in self.blocks.node_indices() {
+            let neighbors_incoming = self.blocks.neighbors_directed(block_idx, Direction::Incoming).collect::<Vec<_>>();
+            // blocks with no incoming edges are not reachable
+            if neighbors_incoming.len() == 0 {
+                continue;
+            }
+            // blocks with exactly one incoming edge which is that block are not reachable
+            else if neighbors_incoming.len() == 1 && neighbors_incoming[0] == block_idx {
+                continue;
+            }
+            // any other block is reachable
+            reachable.push(self.blocks[block_idx].clone());
+        }
+        reachable
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> &ProcedureKind {
+        &self.kind
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn external(&self) -> bool {
         self.external
     }
-}
 
-pub struct StackProgram {
-    procedures: Vec<Positioned<StackProcedure>>,
-    entry_id: Option<usize>,
-    nmi_id: Option<usize>,
-    hwi_id: Option<usize>,
-    swi_ids: [Option<usize>; 256],
-    // constants are replaced during parsing and are declare-before use, so no need to track them further
-}
-impl Display for StackProgram {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
-    }
-}
-impl StackProgram {
-    pub fn empty() -> StackProgram {
-        StackProgram {
-            procedures: Vec::new(),
-            entry_id: None,
-            nmi_id: None,
-            hwi_id: None,
-            swi_ids: [None; 256],
-        }
+    pub fn types_in(&self) -> &Vec<DType> {
+        &self.types_in
     }
 
-    pub fn add_procedure(&mut self, mut procedure: Positioned<StackProcedure>) -> Result<usize, LogEvent> {
-        procedure.id = self.procedures.len();
-
-        match procedure.kind {
-            ProcedureKind::Main => {
-                if self.entry_id.is_some() {
-                    return Err(LogEvent::error("illegal redefinition of main procedure", procedure.pos().clone()));
-                }
-                self.entry_id = Some(procedure.id);
-            }
-            ProcedureKind::Default => {}
-            ProcedureKind::Swi(id) => {
-                if self.swi_ids[id as usize].is_some() {
-                    return Err(LogEvent::error(&format!("illegal redefinition of swi handler {}", id), procedure.pos().clone()));
-                }
-                self.swi_ids[id as usize] = Some(procedure.id);
-            }
-            ProcedureKind::Nmi => {
-                if self.nmi_id.is_some() {
-                    return Err(LogEvent::error("illegal redefinition of nmi handler", procedure.pos().clone()));
-                }
-                self.nmi_id = Some(procedure.id);
-            }
-            ProcedureKind::Hwi => {
-                if self.hwi_id.is_some() {
-                    return Err(LogEvent::error("illegal redefinition of hwi handler", procedure.pos().clone()));
-                }
-                self.hwi_id = Some(procedure.id);
-            }
-        }
-
-        self.procedures.push(procedure);
-
-        Ok(self.procedures.len() - 1)
+    pub fn types_out(&self) -> &Vec<DType> {
+        &self.types_out
     }
 
-    pub fn get_entry_id(&self) -> Result<usize, LogEvent> {
-        self.entry_id.ok_or_else(|| { LogEvent::error("no entry point in program", FilePos::default()) })
+    pub fn statements(&self) -> &Vec<Positioned<StackStatement>> {
+        &self.statements
     }
 
-    pub fn get_entry(&self) -> Option<&Positioned<StackProcedure>> {
-        if let Some(entry_id) = self.entry_id {
-            return self.procedures.get(entry_id)
-        }
-        None
+    pub fn statements_mut(&mut self) -> &mut Vec<Positioned<StackStatement>> {
+        &mut self.statements
     }
 
-    pub fn get_procedures(&self) -> &[Positioned<StackProcedure>] {
-        &self.procedures
+    pub fn label_map(&self) -> &HashMap<String, NodeIndex> {
+        &self.label_map
+    }
+
+    pub fn set_id(&mut self, id: usize) {
+        self.id = id;
+    }
+
+    pub fn set_statements(&mut self, statements: Vec<Positioned<StackStatement>>) {
+        self.statements = statements;
+    }
+
+    pub fn statements_in_block(&self, basic_block: BasicBlock) -> &[Positioned<StackStatement>] {
+        &self.statements[basic_block.start() .. basic_block.start() + basic_block.length()]
+    }
+
+    pub fn statements_in_block_mut(&mut self, basic_block: BasicBlock) -> &mut [Positioned<StackStatement>] {
+        &mut self.statements[basic_block.start() .. basic_block.start() + basic_block.length()]
     }
 }

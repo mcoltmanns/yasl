@@ -1,9 +1,9 @@
 pub mod tokenizer;
 pub mod parser;
 //pub mod typechecker;
-//pub mod blocker;
 //pub mod flowchecker;
 pub mod primitives;
+pub mod irs;
 // TODO at this point maybe move the logger to its own file, it's looking a little overgrown
 
 pub mod logger {
